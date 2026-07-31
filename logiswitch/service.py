@@ -336,3 +336,65 @@ def status() -> dict:
     if is_macos():
         return _macos_status()
     return {"installed": False}
+
+
+def _windows_stop() -> bool:
+    if not _windows_status().get("installed"):
+        return False
+    _run(["schtasks", "/End", "/TN", TASK_NAME], check=False)
+    return True
+
+
+def _windows_start() -> bool:
+    if not _windows_status().get("installed"):
+        return False
+    _run(["schtasks", "/Run", "/TN", TASK_NAME], check=False)
+    return True
+
+
+def _macos_stop() -> bool:
+    if not _plist_path().exists():
+        return False
+    _run(["launchctl", "bootout", f"{_launchctl_domain()}/{SERVICE_LABEL}"], check=False)
+    return True
+
+
+def _macos_start() -> bool:
+    path = _plist_path()
+    if not path.exists():
+        return False
+    _run(["launchctl", "bootstrap", _launchctl_domain(), str(path)], check=False)
+    return True
+
+
+def stop() -> bool:
+    """Stop the running agent if one is registered. Returns whether it existed."""
+    if is_windows():
+        return _windows_stop()
+    if is_macos():
+        return _macos_stop()
+    return False
+
+
+def start() -> bool:
+    """Start the registered agent. Returns whether a service was found to start."""
+    if is_windows():
+        return _windows_start()
+    if is_macos():
+        return _macos_start()
+    return False
+
+
+def restart() -> bool:
+    """Stop and start the registered agent. No-op (returns False) if uninstalled.
+
+    Used by ``logiswitch update`` so a freshly installed build actually takes
+    over from the process still running the old code.
+    """
+    had_service = stop()
+    if had_service:
+        # Give the OS a moment to release the process and, on Windows, the file
+        # handles that block replacing the package. launchd's bootout and
+        # schtasks /End are both asynchronous about the process actually exiting.
+        time.sleep(1.0)
+    return start() if had_service else False

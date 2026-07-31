@@ -5,6 +5,8 @@ logiswitch set mac|win|...     switch every supported device once
 logiswitch watch               run the agent in the foreground
 logiswitch install             start the agent at logon
 logiswitch uninstall           remove it
+logiswitch update              bring this installation up to the latest release
+logiswitch update --check      report whether an update is available
 logiswitch probe               full HID++ dump, for bug reports
 """
 
@@ -232,6 +234,46 @@ def cmd_service_status(_args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_update(args: argparse.Namespace) -> int:
+    from . import updater
+
+    if args.check:
+        available, release = updater.check()
+        if release is None:
+            print(
+                "could not determine the latest release (is the network reachable?)",
+                file=sys.stderr,
+            )
+            return 1
+        if available:
+            print(f"update available: {updater.installed_version()} -> {release.version}")
+            print(f"  {release.wheel_url}")
+            return 0
+        print(f"already on the latest release ({updater.installed_version()})")
+        return 0
+
+    if not updater.is_managed_environment():
+        print(
+            "this command is running outside the installed venv (a development "
+            "checkout), so a self-update would overwrite an editable install. "
+            "Re-run it as the installed entry point, or pull latest with git.",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        new_version = updater.upgrade(force=args.force)
+    except updater.UpdateError as exc:
+        # The service, if any, may have been stopped before the failure; bring it
+        # back so a botched update does not leave the machine unattended.
+        with contextlib.suppress(Exception):
+            service.start()
+        print(f"update failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"logiswitch is now {new_version}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("-v", "--verbose", action="store_true", help="debug logging")
@@ -280,6 +322,23 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "service-status", help="is the logon agent installed and running?", parents=[common]
     ).set_defaults(func=cmd_service_status)
+
+    p_update = sub.add_parser(
+        "update", help="update this installation to the latest release", parents=[common]
+    )
+    p_update.add_argument(
+        "--check",
+        action="store_true",
+        help="only report whether an update is available; do not change anything",
+    )
+    p_update.add_argument(
+        "--force", action="store_true", help="reinstall even if already on the latest version"
+    )
+    p_update.set_defaults(func=cmd_update)
+    # Conventional alias so muscle memory from other tools works.
+    sub.add_parser("selfupdate", help="alias of update", parents=[common]).set_defaults(
+        func=cmd_update, check=False, force=False
+    )
 
     return parser
 

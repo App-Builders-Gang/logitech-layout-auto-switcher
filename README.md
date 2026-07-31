@@ -110,8 +110,25 @@ logiswitch status      # what is attached and what it is set to
 logiswitch set mac     # switch everything once, right now
 logiswitch watch       # run the agent in the foreground
 logiswitch probe       # full HID++ dump for bug reports
+logiswitch update      # bring this installation up to the latest release
 logiswitch uninstall   # remove the logon service
 ```
+
+### Staying up to date
+
+Once installed, each machine keeps itself current on its own:
+
+```bash
+logiswitch update          # stop, fetch the latest release wheel, install, restart
+logiswitch update --check  # just report whether an update is available
+```
+
+`update` pulls the wheel from this repository's [latest release](https://github.com/App-Builders-Gang/logitech-layout-auto-switcher/releases/latest)
+using only the Python standard library — no PyPI account, no extra dependency. It
+stops the running agent first (Windows locks files a running process holds),
+installs, and restarts it; if the install fails the old build is restarted so the
+machine is never left without an agent. The `update` command itself ships from
+v2.0.4 — to get there the first time, re-run the install one-liner above.
 
 ## Why Logi Options+ doesn't fix this
 

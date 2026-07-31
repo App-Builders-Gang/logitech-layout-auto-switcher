@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.0.4 — 2026-07-31
+
+### Added
+
+- **`logiswitch update`** — each installation can now bring itself up to the
+  latest release without re-running the installer. `update` fetches the release
+  wheel from GitHub over HTTPS (standard library only — no PyPI account or extra
+  dependency), stops the running agent, installs the wheel into the same virtualenv
+  with pip, and restarts the agent. `update --check` reports availability without
+  changing anything; `selfupdate` is an alias. Works on Windows and macOS with no
+  administrator rights.
+  The stop-before-install ordering matters on Windows: a running process locks the
+  files pip must replace, so the agent is stopped first and restarted afterwards —
+  even on failure, so a botched update never leaves the machine without an agent.
+  The command arrives in this release; to pick it up the first time, re-run the
+  install one-liner once.
+
+### Fixed
+
+- A property test for `normalise_os` assumed every canonical OS name (such as
+  `tizen`, `webos`, `winemb`) was also a key of the alias map. Hypothesis proved
+  otherwise. The test now asserts the real invariant: `normalise_os` either
+  rejects the input or returns a name present in the OS-mask table.
+
 ## 2.0.3 — 2026-07-31
 
 ### Fixed

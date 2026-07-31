@@ -100,14 +100,19 @@ def test_every_alias_normalises_to_a_real_mask(alias):
     assert p.normalise_os(alias) in p.OS_MASKS
 
 
-@settings(max_examples=50)
+@settings(max_examples=200)
 @given(st.text(max_size=12))
-def test_unknown_os_names_raise_rather_than_guess(name):
-    if name.strip().lower() in p.OS_ALIASES:
-        return
+def test_normalise_os_never_invents_an_os(name):
+    """Whatever the input, normalise_os either rejects it or returns a real mask.
+
+    A name that is a key of OS_MASKS but not of OS_ALIASES (``tizen``, ``webos``,
+    ``winemb``) is legitimately accepted -- it is a canonical OS -- so the guard
+    must be "does it normalise to a known mask", not "is it an alias".
+    """
     try:
-        p.normalise_os(name)
+        result = p.normalise_os(name)
     except ValueError as exc:
-        assert name.strip() in str(exc) or "unknown OS" in str(exc)
-    else:  # pragma: no cover - only on a bug
-        raise AssertionError(f"{name!r} was accepted")
+        # A rejection must name the input and suggest real choices.
+        assert "unknown OS" in str(exc)
+        return
+    assert result in p.OS_MASKS

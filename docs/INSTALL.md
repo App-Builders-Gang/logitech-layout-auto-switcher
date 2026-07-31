@@ -124,6 +124,29 @@ Valid values: `windows`, `macos`, `linux`, `android`, `ios`, `chrome`
 
 ---
 
+## Updating
+
+Once installed, each machine updates itself — no need to re-run the installer:
+
+```bash
+logiswitch update          # fetch the latest release wheel and install it
+logiswitch update --check  # report whether an update is available, change nothing
+```
+
+The command pulls the wheel from the project's
+[latest GitHub release](https://github.com/App-Builders-Gang/logitech-layout-auto-switcher/releases/latest)
+over HTTPS, using only the Python standard library. It stops the running agent
+before writing the new files (a running process holds its package directory on
+Windows), installs the wheel into the same virtualenv with pip, and restarts the
+agent. If the install fails the previous build is restarted, so a broken update
+never leaves the machine unattended.
+
+The `update` command arrives in **v2.0.4**. If you are on an earlier version,
+upgrade once with the install one-liner above to pick it up; after that
+`logiswitch update` handles every subsequent release on its own.
+
+---
+
 ## Running without installing a service
 
 ```bash
