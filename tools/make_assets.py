@@ -87,84 +87,162 @@ def _svg(width, height, p, body):
     )
 
 
-# -- hero ---------------------------------------------------------------------
+# -- keyboard, hero and social card -------------------------------------------
+
+KEYBOARD = ASSETS / "keyboard-mx-keys.svg"
+#: The committed vector's own coordinate system, so annotations can be placed
+#: against real keycaps rather than guessed at.
+KB_VIEWBOX = (145, 292, 1712, 552)
+#: The dual-legend cluster on the bottom row: opt/start and cmd/alt share a keycap,
+#: and which legend is live is exactly what this project switches.
+KB_DUAL_LEGEND = (263, 742, 215, 68)
+
+#: Dark product-card palette. The keyboard is dark in every theme, so the hero and
+#: the social card carry their own background and read identically in light and
+#: dark READMEs -- one file each instead of a light/dark pair holding 400 KB twice.
+CARD = {
+    "bg": "#14171a",
+    "edge": "#2a3038",
+    "panel": "#1b2026",
+    "text": "#e6edf3",
+    "muted": "#9198a1",
+    "accent": "#4493f8",
+    "good": "#3fb950",
+}
 
 
-def hero(p: dict) -> str:
-    def keycap(x, y, label, w=44):
-        return (
-            f'<rect x="{x}" y="{y}" width="{w}" height="30" rx="6" fill="{p["panel"]}" '
-            f'stroke="{p["line"]}" stroke-width="1.5"/>'
-            + _text(x + w / 2, y + 20, label, fill=p["text"], size=13, family=MONO, anchor="middle")
-        )
-
-    body = ['<rect width="900" height="230" fill="none"/>']
-
-    # macOS side
-    body.append(_box(0, 34, 250, 132, p))
-    body.append(_text(24, 64, "macOS", fill=p["muted"], size=13, weight=600))
-    body.append(keycap(24, 82, "⌘"))
-    body.append(keycap(76, 82, "⌥"))
-    body.append(keycap(128, 82, "ctrl"))
-    body.append(_text(24, 146, "platform 1", fill=p["accent"], size=12, family=MONO))
-
-    # keyboard in the middle
-    body.append(_box(310, 52, 280, 96, p, radius=14))
-    for row in range(3):
-        for col in range(9):
-            body.append(
-                f'<rect x="{330 + col * 27}" y="{70 + row * 24}" width="19" height="16" rx="3.5" '
-                f'fill="{p["line"]}"/>'
-            )
-    body.append(
-        _text(450, 176, "one keyboard", fill=p["text"], size=14, weight=600, anchor="middle")
+def _keyboard(scale: float, x: float, y: float) -> str:
+    """Place the committed MX Keys vector at (x, y), scaled about its own origin."""
+    inner = KEYBOARD.read_text("utf-8")
+    inner = inner[inner.index(">", inner.index("<svg")) + 1 : inner.rindex("</svg>")]
+    dx = x - KB_VIEWBOX[0] * scale
+    dy = y - KB_VIEWBOX[1] * scale
+    # Two things the source file gets for free as a standalone document and loses
+    # the moment its content is embedded:
+    #   fill="none" sits on its root <svg> and is inherited by every shape that
+    #   sets no fill; without it those shapes default to black and paint slabs
+    #   over the keycaps.
+    #   Its viewBox only *clips* while it is the root. Embedded, everything
+    #   outside that window -- the prototype header and the author's watermark --
+    #   would render wherever the composition happens to put it.
+    # The clip lives on an untransformed wrapper and the transform on a group inside
+    # it. Renderers disagree about whether an element's own transform applies to its
+    # clip-path, and putting the two on one element makes the crop depend on that
+    # disagreement -- here it cost the bottom row and the numpad.
+    _, _, vw, vh = KB_VIEWBOX
+    return (
+        f'<defs><clipPath id="kbclip" clipPathUnits="userSpaceOnUse">'
+        f'<rect x="{x}" y="{y}" width="{vw * scale}" height="{vh * scale}"/>'
+        f"</clipPath></defs>"
+        f'<g clip-path="url(#kbclip)"><g fill="none" '
+        f'transform="translate({dx:.1f},{dy:.1f}) scale({scale})">{inner}</g></g>'
     )
-    body.append(
+
+
+def _card_svg(width, height, body):
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
+        f'viewBox="0 0 {width} {height}" width="{width}" height="{height}" role="img">'
+        f'<defs><marker id="kbhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" '
+        f'markerHeight="6" orient="auto-start-reverse">'
+        f'<path d="M 0 0 L 10 5 L 0 10 z" fill="{CARD["accent"]}"/></marker></defs>'
+        f"{body}</svg>"
+    )
+
+
+def hero() -> str:
+    c = CARD
+    w, h = 1760, 900
+    kx, ky = 24, 168
+    body = [
+        f'<rect width="{w}" height="{h}" rx="26" fill="{c["bg"]}" stroke="{c["edge"]}" '
+        f'stroke-width="2"/>',
+        _text(48, 74, "One keycap. Two legends.", fill=c["text"], size=38, weight=700),
         _text(
-            450,
-            196,
-            "KVM · Easy-Switch · cable",
-            fill=p["muted"],
-            size=12,
+            48,
+            116,
+            "Your MX Keys already carries both. logiswitch tells it which one is live.",
+            fill=c["muted"],
+            size=21,
+        ),
+        _text(
+            1712,
+            74,
+            "HID++ 0x4531",
+            fill=c["accent"],
+            size=20,
             family=MONO,
-            anchor="middle",
-        )
-    )
+            anchor="end",
+        ),
+        _text(1712, 108, "no remapping", fill=c["muted"], size=17, family=MONO, anchor="end"),
+        _keyboard(1.0, kx, ky),
+    ]
 
-    # Windows side
-    body.append(_box(650, 34, 250, 132, p))
-    body.append(_text(674, 64, "Windows", fill=p["muted"], size=13, weight=600, anchor="start"))
-    body.append(keycap(674, 82, "ctrl"))
-    body.append(keycap(726, 82, "alt"))
-    body.append(keycap(778, 82, "win"))
-    body.append(_text(674, 146, "platform 0", fill=p["accent"], size=12, family=MONO))
-
-    # the arrows that make the point: the layout follows the machine
-    body.append(_arrow(300, 100, 262, 100, p, colour=p["accent"]))
-    body.append(_arrow(600, 100, 638, 100, p, colour=p["accent"]))
+    # Ring the keys whose meaning changes, then lead the eye down to the cards.
+    hx = kx + (KB_DUAL_LEGEND[0] - KB_VIEWBOX[0])
+    hy = ky + (KB_DUAL_LEGEND[1] - KB_VIEWBOX[1])
+    hw, hh = KB_DUAL_LEGEND[2], KB_DUAL_LEGEND[3]
     body.append(
-        _text(
-            450,
-            26,
-            "the layout follows the machine",
-            fill=p["text"],
-            size=15,
-            weight=600,
-            anchor="middle",
-        )
+        f'<rect x="{hx - 6}" y="{hy - 6}" width="{hw + 12}" height="{hh + 12}" rx="12" '
+        f'fill="none" stroke="{c["accent"]}" stroke-width="3"/>'
     )
     body.append(
+        f'<path d="M {hx + hw / 2} {hy + hh + 10} L {hx + hw / 2} 742" fill="none" '
+        f'stroke="{c["accent"]}" stroke-width="2" stroke-dasharray="6 5"/>'
+    )
+
+    cards = [
+        ("on macOS", "⌘ cmd   ⌥ opt", "platform 1", c["accent"]),
+        ("on Windows", "alt   start", "platform 0", c["accent"]),
+        ("either way", "corrected in ~1 s", "measured, not claimed", c["good"]),
+    ]
+    for i, (title, keys, note, colour) in enumerate(cards):
+        x = 48 + i * 562
+        body.append(
+            f'<rect x="{x}" y="{754}" width="530" height="104" rx="14" fill="{c["panel"]}" '
+            f'stroke="{c["edge"]}" stroke-width="1.5"/>'
+        )
+        body.append(_text(x + 26, 790, title, fill=c["muted"], size=18, weight=600))
+        body.append(_text(x + 26, 828, keys, fill=c["text"], size=25, family=MONO, weight=700))
+        body.append(_text(x + 504, 828, note, fill=colour, size=15, family=MONO, anchor="end"))
+    return _card_svg(w, h, "".join(body))
+
+
+def social() -> str:
+    c = CARD
+    w, h = 1280, 640
+    body = [
+        f'<rect width="{w}" height="{h}" fill="{c["bg"]}"/>',
+        f'<rect x="72" y="70" width="64" height="6" rx="3" fill="{c["accent"]}"/>',
+        _text(72, 142, "Logitech Layout Auto Switcher", fill=c["text"], size=52, weight=700),
         _text(
-            450,
-            220,
+            72,
+            192,
+            "Your MX Keys should know which computer it is plugged into.",
+            fill=c["muted"],
+            size=25,
+        ),
+        _text(72, 228, "Now it does.", fill=c["muted"], size=25),
+        _text(
+            72,
+            288,
+            "Mac ⇄ Windows layout · HID++ 0x4531 · no remapping",
+            fill=c["accent"],
+            size=22,
+            family=MONO,
+        ),
+        _keyboard(0.50, 212, 348),
+        _text(
+            72,
+            330,
             "corrected in ~1 s, measured",
-            fill=p["good"],
-            size=12,
+            fill=c["good"],
+            size=22,
             family=MONO,
-            anchor="middle",
-        )
-    )
-    return _svg(900, 230, p, "".join(body))
+            weight=700,
+        ),
+    ]
+    return _card_svg(w, h, "".join(body))
 
 
 # -- flow ---------------------------------------------------------------------
@@ -311,57 +389,20 @@ def architecture(p: dict) -> str:
     return _svg(900, 244, p, "".join(body))
 
 
-# -- social preview -----------------------------------------------------------
-
-
-def social(p: dict) -> str:
-    body = [
-        f'<rect width="1280" height="640" fill="{p["panel"]}"/>',
-        _text(80, 210, "Logitech Layout Auto Switcher", fill=p["text"], size=58, weight=700),
-        _text(
-            80,
-            280,
-            "Your MX Keys should know which computer it is plugged into.",
-            fill=p["muted"],
-            size=27,
-        ),
-        _text(80, 320, "Now it does.", fill=p["muted"], size=27),
-        _text(
-            80,
-            420,
-            "Mac ⇄ Windows layout, switched by the keyboard itself",
-            fill=p["accent"],
-            size=25,
-            family=MONO,
-        ),
-        _text(
-            80,
-            470,
-            "HID++ 0x4531 · no remapping · no account",
-            fill=p["muted"],
-            size=22,
-            family=MONO,
-        ),
-        _text(80, 556, "corrected in ~1 s", fill=p["good"], size=24, family=MONO, weight=700),
-        f'<rect x="80" y="140" width="72" height="6" rx="3" fill="{p["accent"]}"/>',
-    ]
-    return _svg(1280, 640, p, "".join(body))
-
-
-DIAGRAMS = {
-    "hero": hero,
-    "flow": flow,
-    "latency": latency,
-    "architecture": architecture,
-    "social-preview": social,
-}
+#: Diagrams that need a light and a dark variant, selected with <picture>.
+THEMED = {"flow": flow, "latency": latency, "architecture": architecture}
+#: Product cards: they carry their own dark background, so one file serves both
+#: themes and the 400 KB keyboard vector is embedded once, not twice.
+CARDS = {"hero": hero, "social-preview": social}
 
 
 def build() -> dict[Path, str]:
     out: dict[Path, str] = {}
-    for name, fn in DIAGRAMS.items():
+    for name, fn in THEMED.items():
         for suffix, palette in (("light", LIGHT), ("dark", DARK)):
             out[ASSETS / f"{name}-{suffix}.svg"] = fn(palette) + "\n"
+    for name, fn in CARDS.items():
+        out[ASSETS / f"{name}.svg"] = fn() + "\n"
     return out
 
 
@@ -371,7 +412,7 @@ def _render_social_png() -> None:
     Optional: needs rsvg-convert (``brew install librsvg``). The committed PNG is
     what matters, so a machine without it just skips this step.
     """
-    source = ASSETS / "social-preview-dark.svg"
+    source = ASSETS / "social-preview.svg"
     target = ASSETS / "social-preview.png"
     tool = shutil.which("rsvg-convert")
     if tool is None:

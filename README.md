@@ -15,10 +15,7 @@ never hold **Fn+O / Fn+P** for seven seconds again.
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey.svg)](docs/INSTALL.md)
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
-  <img alt="One keyboard between a Mac and a Windows PC. The Mac side shows Command, Option and Control keycaps and platform 1; the Windows side shows Control, Alt and Windows keycaps and platform 0. The layout follows whichever machine holds the keyboard, corrected in about one second." src="assets/hero-light.svg" width="900">
-</picture>
+<img alt="An MX Keys keyboard with the two keys left of the spacebar ringed: each carries two legends, opt and start on one, cmd and alt on the other. On macOS the Command and Option legends are live and the keyboard reports platform 1; on Windows the Alt and Start legends are live and it reports platform 0. Either way the switch is corrected in about one second." src="assets/hero.svg" width="900">
 
 </div>
 
@@ -259,10 +256,12 @@ Not yet — [Solaar](https://github.com/pwr-Solaar/Solaar) already does this wel
 there. The core is platform-neutral, so a udev watcher would be a small addition.
 
 **Is macOS tested?**
-The protocol and agent layers are, on both platforms in CI. The macOS *device
-notification watcher* (`watchers/darwin.py`) has not yet been exercised on real
-Apple hardware — if it fails to register, the agent falls back to polling and
-still works. Reports very welcome.
+Yes, on real hardware as well as in CI — and doing so was worth it. The IOKit
+watcher had been registering its terminate notification under the wrong constant
+(`IOServiceTerminated`; the header spells it `IOServiceTerminate`), so it failed
+with `kIOReturnUnsupported` on every Mac and silently fell back to polling. Fixed
+in 2.0.1. The Easy-Switch round trip that 2.0.2 addresses was found the same way,
+by watching an MX Keys S move between a Mac and a PC and reading the frames.
 
 ## Contributing
 
@@ -279,3 +278,10 @@ MIT — see [LICENSE](LICENSE).
 Protocol groundwork stands on [Solaar](https://github.com/pwr-Solaar/Solaar),
 [Logitech's `cpg-docs`](https://github.com/Logitech/cpg-docs), and
 [lekensteyn's HID++ 1.0 notes](https://lekensteyn.nl/logitech-unifying.html).
+
+The MX Keys illustration in the banner is **“FREE - Logitech MX Keys - Vector”**
+by **David Pokorný (@davidpokornys)**, published on the Figma Community. It is
+used here cropped to the keyboard and re-optimised; see
+[`assets/keyboard-mx-keys.svg`](assets/keyboard-mx-keys.svg). *Logitech*, *logi*
+and *MX Keys* are trademarks of Logitech, used only to identify the hardware this
+project drives — this project is not affiliated with or endorsed by Logitech.
