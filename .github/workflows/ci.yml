@@ -38,6 +38,8 @@ jobs:
         run: ruff format --check --diff .
       - name: Type check
         run: mypy logiswitch
+      - name: README assets are in sync with their generator
+        run: python tools/make_assets.py --check
 
   test:
     name: pytest (${{ matrix.os }}, py${{ matrix.python-version }})

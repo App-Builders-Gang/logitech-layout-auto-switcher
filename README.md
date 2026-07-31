@@ -9,9 +9,16 @@ instant a KVM, Easy-Switch channel or cable hands it to another machine — so y
 never hold **Fn+O / Fn+P** for seven seconds again.
 
 [![CI](https://github.com/App-Builders-Gang/logitech-layout-auto-switcher/actions/workflows/ci.yml/badge.svg)](https://github.com/App-Builders-Gang/logitech-layout-auto-switcher/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/App-Builders-Gang/logitech-layout-auto-switcher/actions/workflows/codeql.yml/badge.svg)](https://github.com/App-Builders-Gang/logitech-layout-auto-switcher/actions/workflows/codeql.yml)
+[![Release](https://img.shields.io/github/v/release/App-Builders-Gang/logitech-layout-auto-switcher?color=0969da)](https://github.com/App-Builders-Gang/logitech-layout-auto-switcher/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
 [![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey.svg)](docs/INSTALL.md)
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+  <img alt="One keyboard between a Mac and a Windows PC. The Mac side shows Command, Option and Control keycaps and platform 1; the Windows side shows Control, Alt and Windows keycaps and platform 0. The layout follows whichever machine holds the keyboard, corrected in about one second." src="assets/hero-light.svg" width="900">
+</picture>
 
 </div>
 
@@ -34,10 +41,10 @@ If any of these sound familiar, this fixes it:
 
 ## The fix
 
-```
-KVM switches  →  OS reports the receiver arrived  →  agent writes HID++ 0x4531  →  correct layout
-                                                                                    ~330 ms
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/flow-dark.svg">
+  <img alt="Three stages: the KVM or Easy-Switch hands the keyboard over; logiswitch hears the device arrive; the MX Keys S has HID++ 0x4531 written to it. A dashed self-loop on the agent marks the 20-second backstop used for hardware that announces nothing." src="assets/flow-light.svg" width="900">
+</picture>
 
 Fn+O / Fn+P are not keyboard-only magic. They write a firmware value that is also
 reachable over Logitech's HID++ 2.0 protocol — feature `0x4531 MULTIPLATFORM`,
@@ -142,7 +149,7 @@ write-up with frames: **[docs/PROTOCOL.md](docs/PROTOCOL.md)**.
 | macOS | yes | yes | no | **yes** |
 | Linux | no | no | yes | not yet |
 | Runs headless, no account | no | yes | yes | **yes** |
-| Idle CPU | background service | event tap | daemon | **0 ms / 60 s measured** |
+| Idle CPU | background service | event tap | daemon | **~45 ms / 60 s measured** |
 
 Solaar is excellent and covers Linux thoroughly — this exists because it is
 Linux-only, and the problem lives on Windows and macOS.
@@ -167,6 +174,11 @@ Other models should work by capability; reports welcome.
 ## Built to sit still
 
 The agent's job is to do nothing, very cheaply, until hardware moves.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/latency-dark.svg">
+  <img alt="How long an Easy-Switch return stays on the wrong layout, on a log scale: 600 seconds before, when only the safety heartbeat caught it; 32 seconds in v2.0.1, where the reconnect was seen but the retry backoff had already reached 30 seconds; 1.1 seconds in v2.0.2, where the device announces itself and is believed." src="assets/latency-light.svg" width="900">
+</picture>
 
 | Measured | |
 |---|---|
@@ -195,6 +207,11 @@ partial open closes what it already acquired, signals unwind the whole stack, an
 the static platform table is cached so the common case is a single read.
 
 ## How it works
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
+  <img alt="The watcher thread (IOKit or cfgmgr32, reporting devices arriving and leaving) and one reader thread per handle (blocked in hid_read, treating an unsolicited frame as the device being back) both feed a bounded, coalescing event queue that never blocks a reader. The queue feeds the worker thread, which reads the platform and writes only if it is wrong. Handles are closed only after their readers are joined." src="assets/architecture-light.svg" width="900">
+</picture>
 
 ```
 logiswitch/
