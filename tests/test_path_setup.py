@@ -37,13 +37,15 @@ def test_add_to_list_handles_an_empty_path():
 
 
 def test_entry_point_dir_points_at_the_running_venv(monkeypatch):
+    # Compare with the same join the function uses, so the assertion holds on
+    # every host OS rather than assuming a platform's separator.
     monkeypatch.setattr(service, "is_windows", lambda: True)
     monkeypatch.setattr(service.sys, "prefix", "C:\\venv")
-    assert service._entry_point_dir() == Path("C:\\venv\\Scripts")
+    assert service._entry_point_dir() == Path("C:\\venv") / "Scripts"
 
     monkeypatch.setattr(service, "is_windows", lambda: False)
     monkeypatch.setattr(service.sys, "prefix", "/opt/venv")
-    assert service._entry_point_dir() == Path("/opt/venv/bin")
+    assert service._entry_point_dir() == Path("/opt/venv") / "bin"
 
 
 # -- Windows: real registry, cleaned up ---------------------------------------
