@@ -25,8 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -54,8 +54,8 @@ jobs:
           - os: windows-latest
             python-version: "3.9"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -83,7 +83,7 @@ jobs:
         run: mv .coverage ".coverage.${{ matrix.os }}.${{ matrix.python-version }}"
 
       - name: Upload coverage data
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-${{ matrix.os }}-${{ matrix.python-version }}
           path: .coverage.*
@@ -93,7 +93,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: junit-${{ matrix.os }}-${{ matrix.python-version }}
           path: junit-*.xml
@@ -106,14 +106,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: pip install coverage[toml]
 
       - name: Collect coverage from every matrix job
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: coverage-*
           merge-multiple: true
@@ -134,7 +134,7 @@ jobs:
         # falling off a cliff, not to be ratcheted up one line at a time.
         run: coverage report --fail-under=82
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: coverage-xml
           path: coverage.xml
@@ -145,8 +145,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: pip install build twine
@@ -157,7 +157,7 @@ jobs:
           python -m venv /tmp/verify
           /tmp/verify/bin/pip install --quiet dist/*.whl
           /tmp/verify/bin/logiswitch --version
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
