@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build
+        run: |
+          pip install build twine
+          python -m build
+          twine check dist/*
+
+      - name: Verify the tag matches the package version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version=$(python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          if [ "$tag" != "$version" ]; then
+            echo "tag $tag does not match pyproject version $version" >&2
+            exit 1
+          fi
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            Install on each machine that shares the keyboard.
+
+            **Windows**
+            ```powershell
+            irm https://raw.githubusercontent.com/${{ github.repository }}/main/install.ps1 | iex
+            ```
+
+            **macOS / Linux**
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash
+            ```

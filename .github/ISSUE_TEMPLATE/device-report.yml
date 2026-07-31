@@ -1,0 +1,59 @@
+name: Device report
+description: Report a Logitech device that works, or does not work
+title: "[device] "
+labels: ["device-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Support is discovered from the hardware, not hardcoded, so a `logiswitch probe`
+        dump is the single most useful thing you can attach.
+
+  - type: input
+    id: model
+    attributes:
+      label: Device model
+      placeholder: MX Keys S / MX Mechanical Mini / Craft ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: connection
+    attributes:
+      label: How is it connected?
+      options:
+        - Logi Bolt receiver
+        - Unifying receiver
+        - Lightspeed / Nano receiver
+        - Bluetooth
+        - USB cable
+    validations:
+      required: true
+
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: Outcome
+      options:
+        - Works
+        - Detected but cannot switch layout
+        - Not detected at all
+    validations:
+      required: true
+
+  - type: textarea
+    id: probe
+    attributes:
+      label: logiswitch probe output
+      description: Contains device names and HID++ feature tables only — no secrets.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Windows 11 26200 / macOS 15.3
+    validations:
+      required: true

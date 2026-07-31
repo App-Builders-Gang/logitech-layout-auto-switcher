@@ -1,0 +1,47 @@
+name: Bug report
+description: Something does not work
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log output
+      description: Run `logiswitch watch -v` and paste the last ~50 lines.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: probe
+    attributes:
+      label: logiswitch probe output
+      render: text
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+    validations:
+      required: true
+
+  - type: dropdown
+    id: options
+    attributes:
+      label: Is Logi Options+ installed and running?
+      options: ["Yes", "No", "Not sure"]
+    validations:
+      required: true
+
+  - type: input
+    id: kvm
+    attributes:
+      label: KVM model, if any
