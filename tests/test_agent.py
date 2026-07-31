@@ -14,6 +14,29 @@ def config(tmp_path, **kwargs):
     return AgentConfig(state_file=tmp_path / "state.json", **defaults)
 
 
+def wait_for(predicate, timeout=10.0, interval=0.02):
+    """Poll `predicate` until it holds. Returns False on timeout."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return False
+
+
+def wait_for_session(agent):
+    """Block until the agent has probed the receiver and knows what it drives.
+
+    A fixed settle sleep is not enough: building a session means a full device
+    scan, and a loaded CI runner can take well over a second. Asserting before
+    that finishes made two tests flaky -- and misleadingly so, because with no
+    session established the agent deliberately treats *any* device chatter as
+    "something came back", so an early assertion changed the behaviour it was
+    trying to observe.
+    """
+    assert wait_for(lambda: bool(agent._driven)), "agent never established a session"
+
+
 def test_assert_once_switches_and_cleans_up(receiver, tmp_path):
     keyboard = receiver.devices[fakehid.MX_KEYS_INDEX]
     keyboard.platform = 1  # currently macOS
@@ -95,7 +118,7 @@ def test_device_event_rebuilds_the_session(receiver, tmp_path):
     agent = Agent(config(tmp_path, force_polling=True))
     agent.start()
     try:
-        time.sleep(0.4)
+        wait_for_session(agent)
         receiver.devices[fakehid.MX_KEYS_INDEX].platform = 1
         agent._on_device_event(DeviceEvent.ARRIVED, "test")
         deadline = time.time() + 5
@@ -111,7 +134,7 @@ def test_wake_notification_triggers_a_reassert(receiver, tmp_path):
     agent = Agent(config(tmp_path, force_polling=True))
     agent.start()
     try:
-        time.sleep(0.4)
+        wait_for_session(agent)
         receiver.devices[fakehid.MX_KEYS_INDEX].platform = 1
         wake = bytes([0x10, fakehid.MX_KEYS_INDEX, 0x41, 0x04, 0, 0, 0])
         agent._on_hidpp_frame(wake)
@@ -134,7 +157,7 @@ def test_a_driven_device_talking_again_triggers_a_reassert(receiver, tmp_path):
     agent = Agent(config(tmp_path, force_polling=True))
     agent.start()
     try:
-        time.sleep(0.4)
+        wait_for_session(agent)
         assert fakehid.MX_KEYS_INDEX in agent._driven
         receiver.devices[fakehid.MX_KEYS_INDEX].platform = 1
         # [long report, device index, feature index 0x0E, function 0 | swId 0]
@@ -187,7 +210,7 @@ def test_chatter_from_a_device_we_do_not_drive_is_ignored(receiver, tmp_path):
     agent = Agent(config(tmp_path, force_polling=True))
     agent.start()
     try:
-        time.sleep(0.4)
+        wait_for_session(agent)
         assert fakehid.MX_MASTER_INDEX not in agent._driven
         receiver.devices[fakehid.MX_KEYS_INDEX].platform = 1
         for _ in range(5):

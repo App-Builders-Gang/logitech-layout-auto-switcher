@@ -22,6 +22,15 @@
   `schtasks` and asserts the ordering (`/End` before `/Create`, `/Run` last), so
   the sequence is pinned rather than assumed.
 
+### Internal
+
+- Four agent tests waited a fixed 400 ms for the agent to establish a session
+  before asserting, which is not long enough on a loaded macOS CI runner and made
+  two of them fail intermittently. They now wait for the session itself. The
+  failure was also self-inflicted: with no session established the agent
+  deliberately treats *any* device chatter as "something came back", so asserting
+  too early changed the very behaviour under test.
+
 ## 2.0.2 — 2026-07-31
 
 Switching a keyboard to another machine and back left the layout wrong for up to
