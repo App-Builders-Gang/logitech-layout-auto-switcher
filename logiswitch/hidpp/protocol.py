@@ -210,6 +210,17 @@ def is_hidpp_frame(frame: bytes) -> bool:
     return len(frame) >= 4 and frame[0] in REPORT_SIZES
 
 
+def is_unsolicited(frame: bytes) -> bool:
+    """Is this a HID++ 2.0 event rather than a reply to something we asked?
+
+    Replies echo the software id we sent; events always carry swId 0. Error
+    frames are excluded -- an error is a reply, just an unhappy one.
+    """
+    if len(frame) < 4 or frame[2] in (ERROR_HIDPP20, ERROR_HIDPP10):
+        return False
+    return (frame[3] & 0x0F) == 0
+
+
 def is_error_for(frame: bytes, device_index: int, feature_index: int, func_byte: int) -> int | None:
     """Return the protocol version (10 or 20) if `frame` is an error for this request.
 

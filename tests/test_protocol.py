@@ -63,3 +63,14 @@ def test_os_aliases_normalise():
 def test_mask_decoding_matches_the_mx_keys_s_table():
     assert p.os_names_for_mask(0x1500) == ["android", "linux", "windows"]
     assert p.os_names_for_mask(0x2000) == ["macos"]
+
+
+def test_unsolicited_frames_are_told_apart_from_replies():
+    # Captured from an MX Keys S the moment it came back on Easy-Switch channel 1:
+    # feature index 0x0E (0x4220 lock-key state), function 0, swId 0.
+    assert p.is_unsolicited(bytes([0x11, 0x05, 0x0E, 0x00]) + bytes(16))
+    # A reply to one of our requests echoes our software id.
+    assert not p.is_unsolicited(bytes([0x11, 0x05, 0x10, p.function_byte(2)]) + bytes(16))
+    # Errors are replies too, and 0x8F/0xFF would otherwise look like swId 0.
+    assert not p.is_unsolicited(bytes([0x10, 0x05, p.ERROR_HIDPP20, 0x10, 0x20, 0x09, 0x00]))
+    assert not p.is_unsolicited(bytes([0x10, 0x05, p.ERROR_HIDPP10, 0x80, 0x00, 0x09, 0x00]))

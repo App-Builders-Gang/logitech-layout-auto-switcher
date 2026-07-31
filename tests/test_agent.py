@@ -124,6 +124,83 @@ def test_wake_notification_triggers_a_reassert(receiver, tmp_path):
         agent.shutdown()
 
 
+def test_a_driven_device_talking_again_triggers_a_reassert(receiver, tmp_path):
+    """The real Easy-Switch signal: no 0x41, just the keyboard speaking up.
+
+    A Bolt receiver stays enumerated across a channel move and forwards no
+    HID++ 1.0 connect notification, so the first sign the keyboard is back is
+    an ordinary 2.0 event -- 0x4220 lock-key state on an MX Keys S.
+    """
+    agent = Agent(config(tmp_path, force_polling=True))
+    agent.start()
+    try:
+        time.sleep(0.4)
+        assert fakehid.MX_KEYS_INDEX in agent._driven
+        receiver.devices[fakehid.MX_KEYS_INDEX].platform = 1
+        # [long report, device index, feature index 0x0E, function 0 | swId 0]
+        agent._on_hidpp_frame(bytes([0x11, fakehid.MX_KEYS_INDEX, 0x0E, 0x00] + [0] * 16))
+        deadline = time.time() + 5
+        while receiver.devices[fakehid.MX_KEYS_INDEX].platform != 0 and time.time() < deadline:
+            time.sleep(0.05)
+        assert receiver.devices[fakehid.MX_KEYS_INDEX].platform == 0
+    finally:
+        agent.stop()
+        agent.shutdown()
+
+
+def test_a_reconnect_restarts_the_backoff_instead_of_inheriting_it(receiver, tmp_path):
+    """The 32-second lag: a device that was away leaves _retry at its 30s ceiling.
+
+    A returning device announces itself before it will answer requests, so the
+    check that follows the announcement usually fails. If that failure inherits
+    the ceiling reached while the device was away, the layout stays wrong for
+    another half minute -- which is exactly what the agent did.
+    """
+    agent = Agent(config(tmp_path, force_polling=True))
+    agent._retry = 30.0
+    agent._on_hidpp_frame(bytes([0x11, fakehid.MX_KEYS_INDEX, 0x0E, 0x00] + [0] * 16))
+    kind, payload = agent._queue.get_nowait()
+    assert (kind.value, payload) == ("device_woke", fakehid.MX_KEYS_INDEX)
+
+    agent.start()
+    try:
+        deadline = time.time() + 5
+        while agent._retry == 30.0 and time.time() < deadline:
+            time.sleep(0.05)
+        assert agent._retry < 30.0
+    finally:
+        agent.stop()
+        agent.shutdown()
+
+
+def test_an_unknown_device_is_heard_when_we_have_none_of_our_own(receiver, tmp_path):
+    """With no session, anything talking is worth a look -- that is why we retry."""
+    agent = Agent(config(tmp_path, force_polling=True))
+    assert not agent._driven
+    agent._on_hidpp_frame(bytes([0x11, fakehid.MX_MASTER_INDEX, 0x09, 0x20] + [0] * 16))
+    kind, _payload = agent._queue.get_nowait()
+    assert kind.value == "device_woke"
+
+
+def test_chatter_from_a_device_we_do_not_drive_is_ignored(receiver, tmp_path):
+    """A mouse sprays movement events; none of them mean the keyboard moved."""
+    agent = Agent(config(tmp_path, force_polling=True))
+    agent.start()
+    try:
+        time.sleep(0.4)
+        assert fakehid.MX_MASTER_INDEX not in agent._driven
+        receiver.devices[fakehid.MX_KEYS_INDEX].platform = 1
+        for _ in range(5):
+            agent._on_hidpp_frame(bytes([0x11, fakehid.MX_MASTER_INDEX, 0x09, 0x20] + [0] * 16))
+        # A reply to one of our own requests must not count either (swId 0x0E).
+        agent._on_hidpp_frame(bytes([0x11, fakehid.MX_KEYS_INDEX, 0x10, 0x1E] + [0] * 16))
+        time.sleep(1.0)
+        assert receiver.devices[fakehid.MX_KEYS_INDEX].platform == 1
+    finally:
+        agent.stop()
+        agent.shutdown()
+
+
 @pytest.mark.parametrize("target", ["mac", "win", "macos", "windows"])
 def test_target_os_aliases_work_end_to_end(receiver, tmp_path, target):
     agent = Agent(config(tmp_path, target_os=target))

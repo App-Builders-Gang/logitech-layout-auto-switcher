@@ -1,5 +1,37 @@
 # Changelog
 
+## 2.0.2 — 2026-07-31
+
+Switching a keyboard to another machine and back left the layout wrong for up to
+ten minutes. Traced on real hardware (MX Keys S on a Logi Bolt receiver): now
+corrected in **1.1 s**.
+
+### Fixed
+
+- **A returning device was never noticed.** An Easy-Switch move leaves the
+  receiver plugged in, so macOS reports no device change and the receiver forwards
+  no HID++ 1.0 `0x41` connect notification — the two things the agent listened
+  for. What the keyboard actually sends on reconnect is an ordinary HID++ 2.0
+  event (`11 05 0e 00`: feature `0x4220`, lock-key state), and byte 2 of a 2.0
+  frame is a feature index that can never equal `0x41`. The agent now treats any
+  unsolicited frame from a device it drives as "I am back", which also covers the
+  `0x4531` platform-change event a keyboard emits when something else moves it.
+  Chatter from devices it does not drive is ignored, so a mouse cannot trigger it.
+- **The retry after a return inherited the wrong backoff.** A device announces
+  itself a moment before it will answer requests — a scan one second after the
+  announcement still finds nothing — so the check that follows usually fails. That
+  failure used to inherit the 30 s ceiling reached while the device was away,
+  turning a return into a 32 s wait. A reconnect now restarts the backoff, and the
+  ceiling is 10 s rather than 30 s.
+- **The safety re-check was the only backstop and ran every 600 s.** It is now
+  20 s (`--reassert` tunes it, 0 disables). Idle cost goes from nothing to about
+  45 ms of CPU per minute; the alternative is a layout that stays wrong.
+
+### Added
+
+- The log now says how long nothing answered, so a slow round trip is measurable
+  without a debug build: `device(s) answering again after 1.1s away`.
+
 ## 2.0.1 — 2026-07-31
 
 Three macOS defects, all found in one reinstall on real Apple hardware.

@@ -170,18 +170,25 @@ The agent's job is to do nothing, very cheaply, until hardware moves.
 
 | Measured | |
 |---|---|
-| CPU over 60 s idle | **0 ms** (below the timer's resolution) |
+| CPU over 60 s idle | **~45 ms**, three re-checks |
 | Steady-state check | **15 ms**, one HID++ read |
+| Easy-Switch return corrected in | **1.1 s** (MX Keys S on a Bolt receiver) |
 | Discovery of all 7 device slots | **836 ms** |
 | Platform switch | **326 ms** |
 | 300 + 20 open/close cycles | zero thread growth, flat RSS |
 | Shutdown on SIGTERM | ~0.5 s |
 
-**Zero polling.** Device changes come from `CM_Register_Notification` on Windows
-(the modern, window-handle-free API) and IOKit service matching on macOS. Device
-*wake* comes from the receiver's own HID++ `0x41` notification. Every thread sits
-in a kernel wait; nothing spins. A polling watcher exists only as a fallback if
-native registration fails.
+**Event-driven first.** Device changes come from `CM_Register_Notification` on
+Windows (the modern, window-handle-free API) and IOKit service matching on macOS.
+Device *wake* comes from the device itself: whatever it says first on reconnect —
+`0x4220`, `0x1D4B`, `0x0020`, or a receiver's HID++ `0x41` — is taken as "I am
+back". Every thread sits in a kernel wait; nothing spins. A polling watcher exists
+only as a fallback if native registration fails.
+
+**One backstop, on purpose.** An Easy-Switch move leaves the receiver plugged in,
+so the OS reports nothing and the agent could otherwise sit idle while the layout
+is wrong. A 20 s re-check (`--reassert`, one cached read) bounds that. Measured on
+real hardware, the announcement path recovers in ~1 s and the backstop never fires.
 
 **Deterministic cleanup.** Reader threads are joined before handles close, a
 partial open closes what it already acquired, signals unwind the whole stack, and
@@ -225,8 +232,10 @@ Only if they target different platforms on the same machine. Then Options+ wins,
 and the log tells you so after three reverts.
 
 **My KVM only switches video, not USB.**
-Then nothing disconnects and there is no arrival event. The safety heartbeat still
-corrects it; lower it with `--reassert 30`.
+Then nothing disconnects and there is no arrival event — the same situation as an
+Easy-Switch move, where the receiver stays plugged in. The agent reacts to the
+device speaking up when it reconnects (measured: ~1 s), and re-checks every 20 s
+as a backstop; tune it with `--reassert`.
 
 **Linux?**
 Not yet — [Solaar](https://github.com/pwr-Solaar/Solaar) already does this well

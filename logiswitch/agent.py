@@ -40,11 +40,19 @@ class AgentConfig:
     target_os: str
     #: Coalesce the burst of interface events a single KVM switch produces.
     debounce: float = 0.6
-    #: Safety re-check. Cheap (one read), and self-heals if something external
-    #: changes the platform behind our back. 0 disables it entirely.
-    reassert_interval: float = 600.0
+    #: Safety re-check, and the only thing that catches a device coming back on
+    #: hardware that announces nothing. A Bolt receiver stays enumerated across an
+    #: Easy-Switch move, so the OS reports no change and the receiver forwards no
+    #: HID++ 1.0 connect notification: with a live session open, the agent has no
+    #: other reason to talk to the device and would not notice it ever left. Cheap
+    #: -- one read per device, features are cached -- so this can be frequent.
+    #: 0 disables it, which limits the agent to what the OS and device announce.
+    reassert_interval: float = 20.0
     retry_initial: float = 2.0
-    retry_max: float = 30.0
+    #: Ceiling for the retry backoff while a device is away. This is the worst case
+    #: for noticing it came back when it announces nothing, so it is deliberately
+    #: short: a failed attempt only costs the receiver a timed-out request.
+    retry_max: float = 10.0
     vendor_id: int = p.LOGITECH_VID
     force_polling: bool = False
     state_file: Path | None = None
@@ -74,11 +82,17 @@ class Agent:
         self._worker: threading.Thread | None = None
         self._watcher: Watcher | None = None
         self._sessions: list[Session] = []
+        #: Device indices we drive. Read from reader threads, rebound (never
+        #: mutated) from the worker, so no lock is needed.
+        self._driven: frozenset[int] = frozenset()
         self._hints: dict[str, int] = self._load_hints()
         self._retry = 0.0
         self._changes_in_a_row = 0
         self._contention_warned = False
         self._last_summary: str | None = None
+        #: When the devices stopped answering, so the log can say how long a
+        #: KVM/Easy-Switch round trip actually took to recover.
+        self._absent_since: float | None = None
 
     # -- public API -----------------------------------------------------------
 
@@ -155,8 +169,24 @@ class Agent:
 
     def _on_hidpp_frame(self, frame: bytes) -> None:
         # Runs on a reader thread.
-        if len(frame) >= 3 and frame[2] == p.NOTIF_DEVICE_CONNECTION:
-            self._put((_Event.DEVICE_WOKE, frame[1]))
+        if len(frame) < 4:
+            return
+        index = frame[1]
+        if frame[2] == p.NOTIF_DEVICE_CONNECTION:
+            # HID++ 1.0: the receiver itself announces a device connecting.
+            self._put((_Event.DEVICE_WOKE, index))
+            return
+        if p.is_unsolicited(frame) and (not self._driven or index in self._driven):
+            # A Bolt receiver stays enumerated across an Easy-Switch move and
+            # forwards no HID++ 1.0 connect notification, so the only sign that the
+            # keyboard came back is that it starts talking again. Which feature
+            # speaks first is device-specific -- an MX Keys S sends 0x4220 lock-key
+            # state, others send 0x1D4B or 0x0020 -- so trust the sender, not the
+            # message. Once we have devices, chatter from ones we do not drive is
+            # ignored (a mouse sprays movement events). With no devices we accept
+            # anything: we are mid-retry precisely because the keyboard was away,
+            # and that is the moment its return matters most.
+            self._put((_Event.DEVICE_WOKE, index))
 
     def _put(self, item: tuple) -> None:
         try:
@@ -191,7 +221,13 @@ class Agent:
                 self._retry = 0.0
                 continue
             if kind is _Event.DEVICE_WOKE:
-                log.debug("device %s reported a connection change", payload)
+                log.debug("device %s spoke unprompted -- treating it as a reconnect", payload)
+                # A device announces itself before it will answer requests: a scan
+                # one second after the frame still finds nothing. Restart the
+                # backoff so the retries that follow are 0.2s, 2s, 4s, 8s instead
+                # of inheriting the 30s ceiling reached while it was away -- that
+                # inheritance is what made a return take half a minute to correct.
+                self._retry = 0.0
                 next_assert = min(
                     next_assert or float("inf"), time.monotonic() + 0.2
                 )
@@ -205,6 +241,7 @@ class Agent:
                 except Exception:
                     log.exception("unexpected failure while applying the platform")
                     ok = False
+                self._note_presence(ok)
                 if ok:
                     self._retry = 0.0
                     if self._changes_in_a_row:
@@ -230,6 +267,24 @@ class Agent:
                 next_assert = now
 
         self._teardown_sessions("worker exiting")
+
+    def _note_presence(self, reachable: bool) -> None:
+        """Log the gap while nothing answered.
+
+        Without this the log shows a switch happening but never says how long the
+        layout was wrong, which is the one number that matters when a KVM round
+        trip feels slow.
+        """
+        if reachable:
+            if self._absent_since is not None:
+                log.info(
+                    "device(s) answering again after %.1fs away",
+                    time.monotonic() - self._absent_since,
+                )
+                self._absent_since = None
+        elif self._absent_since is None:
+            self._absent_since = time.monotonic()
+            log.info("nothing is answering; waiting for a device to come back")
 
     # -- the actual work ------------------------------------------------------
 
@@ -271,6 +326,7 @@ class Agent:
                     )
                 else:
                     summary = f"{info.name}={option.label}"
+                    log.debug("%s reads %s, nothing to do", info.name, option.label)
                     if summary != self._last_summary:
                         log.info("%s already on %s", info.name, option.label)
                         self._last_summary = summary
@@ -329,11 +385,20 @@ class Agent:
                     info.kind,
                 )
             self._sessions.append(session)
+        self._refresh_driven()
         self._save_hints()
+
+    def _refresh_driven(self) -> None:
+        self._driven = frozenset(
+            device.index for session in self._sessions for device, _info in session.supported
+        )
 
     def _teardown_sessions(self, reason: str) -> None:
         if not self._sessions:
             return
+        # _driven deliberately survives: a frame already in flight when we close
+        # arrives just after, and dropping it loses a real platform-change event.
+        # Device indices are stable per receiver, so a stale entry is harmless.
         log.debug("closing %d session(s): %s", len(self._sessions), reason)
         for session in self._sessions:
             try:

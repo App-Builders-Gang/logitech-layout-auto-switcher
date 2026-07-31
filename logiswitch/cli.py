@@ -251,8 +251,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_watch.add_argument(
         "--reassert",
         type=float,
-        default=600.0,
-        help="safety re-check interval in seconds; 0 disables it (default: 600)",
+        default=AgentConfig.reassert_interval,
+        help="how often to re-check the devices, in seconds; this is what catches a "
+        "keyboard returning on hardware that announces nothing. 0 disables it "
+        f"(default: {AgentConfig.reassert_interval:.0f})",
     )
     p_watch.add_argument("--once", action="store_true", help="apply once and exit")
     p_watch.add_argument(

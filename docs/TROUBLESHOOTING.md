@@ -52,10 +52,19 @@ quitting Options+ on that machine.
 2. Check the log for `watching for device changes via cfgmgr32` (Windows) or
    `via iokit` (macOS). If it says **`via polling`**, native notifications failed
    to register and it fell back — still works, just up to 2 s slower.
-3. Some KVMs keep USB permanently attached to both hosts and only switch video.
-   If your dongle never actually disconnects there is no arrival event to react
-   to. The safety heartbeat (default 600 s) will still correct it eventually;
-   lower it with `logiswitch watch --reassert 30`.
+3. Some KVMs keep USB permanently attached to both hosts and only switch video,
+   and an Easy-Switch move never disconnects the receiver at all. Either way the
+   OS reports nothing. The agent then relies on the device speaking up when it
+   reconnects, and on the re-check interval (default 20 s) as the backstop; tune
+   it with `logiswitch watch --reassert 10`.
+
+   The log states the recovery time directly:
+
+   ```
+   12:50:18 INFO nothing is answering; waiting for a device to come back
+   12:50:20 INFO switched MX Keys S to macos (platform 1)
+   12:50:20 INFO device(s) answering again after 1.1s away
+   ```
 
 ---
 
