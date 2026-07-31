@@ -282,8 +282,10 @@ def test_download_writes_the_bytes_to_disk(monkeypatch, tmp_path):
 # -- environment detection ----------------------------------------------------
 
 
-def test_a_real_venv_is_detected_as_managed():
-    # The test runner is inside a venv (the project's dev environment).
+def test_is_managed_environment_detects_a_venv(monkeypatch):
+    """prefix != base_prefix is exactly what 'we are inside a venv' means."""
+    monkeypatch.setattr(updater.sys, "prefix", "/venv")
+    monkeypatch.setattr(updater.sys, "base_prefix", "/usr")
     assert updater.is_managed_environment() is True
 
 
