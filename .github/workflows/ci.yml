@@ -129,10 +129,10 @@ jobs:
       - name: Enforce the floor
         # Windows-only and macOS-only code (the two ctypes watchers, the two service
         # backends) is each covered by exactly one half of the matrix, so only the
-        # combined report is meaningful. The floor is deliberately a little below
-        # where the suite actually sits: it exists to catch coverage falling off a
-        # cliff, not to be gamed upward by one line at a time.
-        run: coverage report --fail-under=80
+        # combined report is meaningful. The floor sits just below where the suite
+        # actually measures (84% with branch coverage): it exists to catch coverage
+        # falling off a cliff, not to be ratcheted up one line at a time.
+        run: coverage report --fail-under=82
 
       - uses: actions/upload-artifact@v4
         with:
