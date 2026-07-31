@@ -6,35 +6,52 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Least privilege by default; no job here needs to write to the repository.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: "1"
+  # Make a UnicodeEncodeError in a log line fail loudly rather than by platform.
+  PYTHONIOENCODING: "utf-8"
 
 jobs:
   lint:
     name: ruff + mypy
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: pyproject.toml
       - run: pip install ruff mypy
-      - run: ruff check .
-      - run: mypy logiswitch
+      - name: Lint
+        run: ruff check --output-format=github .
+      - name: Format check
+        run: ruff format --check --diff .
+      - name: Type check
+        run: mypy logiswitch
 
   test:
     name: pytest (${{ matrix.os }}, py${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         os: [windows-latest, macos-latest]
-        python-version: ["3.9", "3.12"]
-        exclude:
-          # macos-latest runners are arm64; 3.9 has no arm64 build there.
-          - os: macos-latest
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        include:
+          # macos-latest runners are arm64 and have no 3.9 build; Windows still
+          # supports the version the project claims, so keep it covered there.
+          - os: windows-latest
             python-version: "3.9"
     steps:
       - uses: actions/checkout@v4
@@ -42,20 +59,84 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+          cache-dependency-path: pyproject.toml
+
       - name: Install
         run: pip install -e ".[dev]"
+
       - name: Test
-        run: pytest -q
+        run: pytest --cov --cov-report= --junitxml=junit-${{ matrix.os }}-${{ matrix.python-version }}.xml
+
       - name: CLI smoke test
-        # No Logitech hardware on a runner, so "nothing found" is the correct
-        # outcome; this only proves the entry point imports and runs.
+        # A runner has no Logitech hardware, so "nothing found" is the correct
+        # outcome; this only proves the entry point imports, parses and exits sanely.
         run: |
           python -m logiswitch --version
           python -m logiswitch status || true
+          python -m logiswitch probe || true
+
+      - name: Upload coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}-${{ matrix.python-version }}
+          path: .coverage.*
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 5
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-${{ matrix.os }}-${{ matrix.python-version }}
+          path: junit-*.xml
+          if-no-files-found: ignore
+          retention-days: 5
+
+  coverage:
+    name: combined coverage
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install coverage[toml]
+
+      - name: Collect coverage from every matrix job
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-*
+          merge-multiple: true
+
+      - name: Combine
+        # Paths differ between the Windows and macOS runners; --keep is not needed
+        # but relative_files (set in pyproject) is what makes the merge line up.
+        run: |
+          coverage combine
+          coverage report
+          coverage xml
+
+      - name: Enforce the floor
+        # Windows-only and macOS-only code (the two ctypes watchers, the two service
+        # backends) is each covered by exactly one half of the matrix, so only the
+        # combined report is meaningful. The floor is deliberately a little below
+        # where the suite actually sits: it exists to catch coverage falling off a
+        # cliff, not to be gamed upward by one line at a time.
+        run: coverage report --fail-under=80
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          retention-days: 5
 
   build:
     name: build distributions
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -63,8 +144,14 @@ jobs:
           python-version: "3.12"
       - run: pip install build twine
       - run: python -m build
-      - run: twine check dist/*
+      - run: twine check --strict dist/*
+      - name: Install the wheel in a clean environment
+        run: |
+          python -m venv /tmp/verify
+          /tmp/verify/bin/pip install --quiet dist/*.whl
+          /tmp/verify/bin/logiswitch --version
       - uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/
+          retention-days: 5

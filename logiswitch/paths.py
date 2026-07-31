@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import logging.handlers
 import os
@@ -82,9 +83,17 @@ def python_executable(windowless: bool = False) -> Path:
     return executable
 
 
-def setup_logging(verbose: bool = False, log_file: Path | None = None, console: bool = True) -> None:
+def setup_logging(
+    verbose: bool = False, log_file: Path | None = None, console: bool = True
+) -> None:
     root = logging.getLogger("logiswitch")
     root.setLevel(logging.DEBUG if verbose else logging.INFO)
+    # Close before dropping: clearing the list alone orphans the rotating handler's
+    # open file, leaking a descriptor every time logging is reconfigured.
+    for existing in root.handlers[:]:
+        # pragma: no cover - a handler that cannot close is not fatal
+        with contextlib.suppress(Exception):
+            existing.close()
     root.handlers.clear()
     root.propagate = False
     formatter = logging.Formatter("%(asctime)s %(levelname)-7s %(message)s", "%Y-%m-%d %H:%M:%S")

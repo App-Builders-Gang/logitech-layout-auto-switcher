@@ -22,7 +22,38 @@
   `schtasks` and asserts the ordering (`/End` before `/Create`, `/Run` last), so
   the sequence is pinned rather than assumed.
 
+- **Reconfiguring logging leaked a file handle.** `setup_logging` cleared the
+  handler list without closing the handlers first, orphaning the rotating file
+  handler's open descriptor on every call. Found by turning `ResourceWarning`
+  into a test failure.
+
 ### Internal
+
+The test suite was hardened rather than merely extended: **165 tests, up from 69**,
+and the harness now fails on the things that used to slip through silently.
+
+- **Leak detection is automatic.** An autouse fixture fails any test that leaves a
+  reader, worker or watcher thread running, or a HID handle open, so a leak is
+  attributed to the test that caused it instead of surfacing later as an
+  unrelated flake.
+- **Logger state is restored between tests.** Running the CLI sets
+  `propagate = False` on the package logger; without isolation any later test
+  using `caplog` would have silently recorded nothing.
+- **Property-based tests** (Hypothesis) cover the wire format — frame building,
+  response matching, error decoding and OS-mask decoding — including the
+  guarantee that arbitrary bytes from a shared receiver never crash the matchers.
+- **Robustness and concurrency tests**: malformed and truncated frames, a
+  notification listener that raises, concurrent requests that must not cross-talk,
+  closing a transport mid-request, and repeated concurrent closes.
+- **The CLI is tested** — exit codes, output and argument handling — where it
+  previously had no coverage at all.
+- `pytest` now runs with `--strict-markers`, `--strict-config`, `xfail_strict`,
+  warnings as errors, and a per-test timeout so a deadlock fails loudly instead of
+  hanging CI.
+- CI gained a `ruff format` check, a combined-coverage gate across both operating
+  systems, a wider Python matrix (3.9–3.13), least-privilege permissions, job
+  timeouts, a clean-environment wheel install check, CodeQL, Dependabot and a
+  pre-commit config.
 
 - Four agent tests waited a fixed 400 ms for the agent to establish a session
   before asserting, which is not long enough on a loaded macOS CI runner and made

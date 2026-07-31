@@ -54,9 +54,7 @@ class _ResponseSink:
     def accept(self, frame: bytes) -> bool:
         proto = p.is_error_for(frame, self.device_index, self.feature_index, self.func_byte)
         if proto is not None:
-            self.error = p.error_from(
-                frame, proto, f" on feature 0x{self.feature_index:02X}"
-            )
+            self.error = p.error_from(frame, proto, f" on feature 0x{self.feature_index:02X}")
             self.event.set()
             return True
         if p.is_response_to(frame, self.device_index, self.feature_index, self.func_byte):
@@ -143,7 +141,10 @@ class Transport:
         self._dead = False
         for handle in seen.values():
             thread = threading.Thread(
-                target=self._read_loop, args=(handle,), name=f"hidpp-reader-{self.label}", daemon=True
+                target=self._read_loop,
+                args=(handle,),
+                name=f"hidpp-reader-{self.label}",
+                daemon=True,
             )
             thread.start()
             self._readers.append(thread)

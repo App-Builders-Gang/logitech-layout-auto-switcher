@@ -37,6 +37,21 @@ def wait_for_session(agent):
     assert wait_for(lambda: bool(agent._driven)), "agent never established a session"
 
 
+def wait_until_settled(agent, receiver, index=None, platform=0):
+    """Block until the agent has finished its *first* assert, not merely started it.
+
+    ``_driven`` is populated while the session is being built, before the initial
+    ``ensure_os`` runs. A test that flips the platform the moment ``_driven``
+    appears is racing that first assert, which then quietly puts the platform back
+    -- so the test either fails, or passes for entirely the wrong reason.
+    """
+    index = fakehid.MX_KEYS_INDEX if index is None else index
+    wait_for_session(agent)
+    assert wait_for(lambda: receiver.devices[index].platform == platform), (
+        "the agent never completed its initial assert"
+    )
+
+
 def test_assert_once_switches_and_cleans_up(receiver, tmp_path):
     keyboard = receiver.devices[fakehid.MX_KEYS_INDEX]
     keyboard.platform = 1  # currently macOS
@@ -118,7 +133,7 @@ def test_device_event_rebuilds_the_session(receiver, tmp_path):
     agent = Agent(config(tmp_path, force_polling=True))
     agent.start()
     try:
-        wait_for_session(agent)
+        wait_until_settled(agent, receiver)
         receiver.devices[fakehid.MX_KEYS_INDEX].platform = 1
         agent._on_device_event(DeviceEvent.ARRIVED, "test")
         deadline = time.time() + 5
@@ -134,7 +149,7 @@ def test_wake_notification_triggers_a_reassert(receiver, tmp_path):
     agent = Agent(config(tmp_path, force_polling=True))
     agent.start()
     try:
-        wait_for_session(agent)
+        wait_until_settled(agent, receiver)
         receiver.devices[fakehid.MX_KEYS_INDEX].platform = 1
         wake = bytes([0x10, fakehid.MX_KEYS_INDEX, 0x41, 0x04, 0, 0, 0])
         agent._on_hidpp_frame(wake)
@@ -157,7 +172,7 @@ def test_a_driven_device_talking_again_triggers_a_reassert(receiver, tmp_path):
     agent = Agent(config(tmp_path, force_polling=True))
     agent.start()
     try:
-        wait_for_session(agent)
+        wait_until_settled(agent, receiver)
         assert fakehid.MX_KEYS_INDEX in agent._driven
         receiver.devices[fakehid.MX_KEYS_INDEX].platform = 1
         # [long report, device index, feature index 0x0E, function 0 | swId 0]
@@ -210,7 +225,7 @@ def test_chatter_from_a_device_we_do_not_drive_is_ignored(receiver, tmp_path):
     agent = Agent(config(tmp_path, force_polling=True))
     agent.start()
     try:
-        wait_for_session(agent)
+        wait_until_settled(agent, receiver)
         assert fakehid.MX_MASTER_INDEX not in agent._driven
         receiver.devices[fakehid.MX_KEYS_INDEX].platform = 1
         for _ in range(5):

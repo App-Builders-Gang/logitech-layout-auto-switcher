@@ -56,7 +56,9 @@ class DeviceInfo:
 class HidppDevice:
     """A device reachable through a :class:`Transport` at one device index."""
 
-    def __init__(self, transport: Transport, index: int, protocol_version: tuple[int, int] = (0, 0)):
+    def __init__(
+        self, transport: Transport, index: int, protocol_version: tuple[int, int] = (0, 0)
+    ):
         self.transport = transport
         self.index = index
         self.protocol_version = protocol_version
@@ -73,7 +75,11 @@ class HidppDevice:
 
     def ping(self, timeout: float = 0.6) -> tuple[int, int]:
         reply = self.transport.request(
-            self.index, p.FEATURE_ROOT, p.ROOT_GET_PROTOCOL_VERSION, b"\x00\x00\xaa", timeout=timeout
+            self.index,
+            p.FEATURE_ROOT,
+            p.ROOT_GET_PROTOCOL_VERSION,
+            b"\x00\x00\xaa",
+            timeout=timeout,
         )
         if len(reply) < 3 or reply[2] != 0xAA:
             raise p.HidppTimeout(f"bad ping echo from device {self.index}")
@@ -156,9 +162,7 @@ class HidppDevice:
         count = info[3] if len(info) > 3 else 0
         options = []
         for i in range(count):
-            r = self.transport.request(
-                self.index, fi, p.MP_GET_PLATFORM_DESCRIPTOR, bytes([i])
-            )
+            r = self.transport.request(self.index, fi, p.MP_GET_PLATFORM_DESCRIPTOR, bytes([i]))
             if len(r) < 4:
                 continue
             mask = (r[2] << 8) | r[3]

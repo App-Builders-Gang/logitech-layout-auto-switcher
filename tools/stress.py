@@ -1,7 +1,7 @@
 """Leak check: hammer the open/close cycle and watch threads, handles and RSS.
 
-    python tools/stress.py            # against real hardware, 20 cycles
-    python tools/stress.py 200 fake   # against the fake receiver, 200 cycles
+python tools/stress.py            # against real hardware, 20 cycles
+python tools/stress.py 200 fake   # against the fake receiver, 200 cycles
 """
 
 from __future__ import annotations
@@ -99,9 +99,7 @@ def main() -> int:
             transport.close()
         if cycle % max(1, cycles // 10) == 0:
             gc.collect()
-            print(
-                f"  cycle {cycle:4d}: threads={threading.active_count()} rss={rss_mb():.1f} MB"
-            )
+            print(f"  cycle {cycle:4d}: threads={threading.active_count()} rss={rss_mb():.1f} MB")
 
     gc.collect()
     time.sleep(0.5)

@@ -110,9 +110,7 @@ class _Frameworks:
 
     def cfnum(self, value: int) -> ctypes.c_void_p:
         raw = ctypes.c_int32(value)
-        return ctypes.c_void_p(
-            self.cf.CFNumberCreate(None, kCFNumberSInt32Type, ctypes.byref(raw))
-        )
+        return ctypes.c_void_p(self.cf.CFNumberCreate(None, kCFNumberSInt32Type, ctypes.byref(raw)))
 
 
 _IOServiceMatchingCallback = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_uint32)

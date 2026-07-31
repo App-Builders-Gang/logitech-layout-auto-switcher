@@ -19,10 +19,32 @@ python -m venv .venv
 ```
 
 ```bash
-pytest              # 59 tests, no hardware required
-ruff check .
+pytest                  # 165 tests, no hardware required
+pytest --cov            # with coverage
+ruff check . && ruff format --check .
 mypy logiswitch
 ```
+
+Or install the hooks and let them run for you:
+
+```bash
+pip install pre-commit && pre-commit install
+```
+
+### What the harness enforces for you
+
+- **Thread and handle leaks fail the test that caused them.** An autouse fixture
+  checks after every test, so a forgotten `close()` is attributed correctly
+  instead of surfacing later as an unrelated flake.
+- **Warnings are errors**, including `ResourceWarning` — that is how the leaked
+  logging file handle was found.
+- **Tests must not depend on order.** Logger state is snapshotted and restored
+  between tests; nothing else may leak global state either.
+- **No fixed settle sleeps.** Wait on the condition, not the clock — use the
+  `wait_for` / `wait_until_settled` helpers in `tests/test_agent.py`. A fixed
+  sleep passes locally and fails on a loaded CI runner.
+- A per-test timeout means a deadlock fails with a traceback rather than hanging
+  the job.
 
 ## Testing without hardware
 

@@ -57,7 +57,10 @@ def mx_keys_s(index: int = MX_KEYS_INDEX) -> FakeDevice:
     return FakeDevice(
         index,
         "MX Keys S",
-        features={p.FEATURE_DEVICE_NAME: DEVICE_NAME_INDEX, p.FEATURE_MULTIPLATFORM: MULTIPLATFORM_INDEX},
+        features={
+            p.FEATURE_DEVICE_NAME: DEVICE_NAME_INDEX,
+            p.FEATURE_MULTIPLATFORM: MULTIPLATFORM_INDEX,
+        },
         platform=0,
     )
 
@@ -79,12 +82,17 @@ def craft_dualplatform(index: int = 2) -> FakeDevice:
 class FakeReceiver:
     """Answers HID++ frames the way a Bolt receiver does."""
 
-    def __init__(self, devices: list[FakeDevice], product_id: int = BOLT_PID):
+    def __init__(
+        self, devices: list[FakeDevice], product_id: int = BOLT_PID, truncate_replies: bool = False
+    ):
         self.devices = {d.index: d for d in devices}
         self.product_id = product_id
         self.handles: list[FakeHandle] = []
         self.writes = 0
         self.lock = threading.Lock()
+        #: Reply with only the header, no payload. Firmware that answers a feature
+        #: it half-implements looks like this, and it must not crash discovery.
+        self.truncate_replies = truncate_replies
 
     # -- enumeration ----------------------------------------------------------
 
@@ -175,8 +183,9 @@ class FakeReceiver:
             return self._pad(frame, b"")
         return self._error20(frame, 7)
 
-    @staticmethod
-    def _pad(frame: bytes, payload: bytes) -> bytes:
+    def _pad(self, frame: bytes, payload: bytes) -> bytes:
+        if self.truncate_replies:
+            return bytes([p.REPORT_LONG, frame[1], frame[2], frame[3]])
         out = bytearray(p.LEN_LONG)
         out[0] = p.REPORT_LONG
         out[1] = frame[1]

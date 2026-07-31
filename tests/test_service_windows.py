@@ -16,9 +16,7 @@ import pytest
 
 from logiswitch import service
 
-pytestmark = pytest.mark.skipif(
-    not service.is_windows(), reason="Scheduled Tasks are Windows-only"
-)
+pytestmark = pytest.mark.skipif(not service.is_windows(), reason="Scheduled Tasks are Windows-only")
 
 
 MISSING = "ERROR: The system cannot find the file specified."

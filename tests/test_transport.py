@@ -25,7 +25,10 @@ def test_request_times_out_when_the_device_is_asleep(receiver, transport):
     receiver.devices[fakehid.MX_KEYS_INDEX].asleep = True
     with pytest.raises(p.HidppTimeout):
         transport.request(
-            fakehid.MX_KEYS_INDEX, p.FEATURE_ROOT, p.ROOT_GET_PROTOCOL_VERSION, b"\x00\x00\xaa",
+            fakehid.MX_KEYS_INDEX,
+            p.FEATURE_ROOT,
+            p.ROOT_GET_PROTOCOL_VERSION,
+            b"\x00\x00\xaa",
             timeout=0.2,
         )
 

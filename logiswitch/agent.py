@@ -110,8 +110,9 @@ class Agent:
             self._watcher.start(self._on_device_event)
             log.info("watching for device changes via %s", self._watcher.name)
         except Exception as exc:
-            log.warning("%s watcher failed to start (%s); falling back to polling",
-                        self._watcher.name, exc)
+            log.warning(
+                "%s watcher failed to start (%s); falling back to polling", self._watcher.name, exc
+            )
             from .watchers.polling import PollingWatcher
 
             self._watcher = PollingWatcher(self.cfg.vendor_id)
@@ -228,9 +229,7 @@ class Agent:
                 # of inheriting the 30s ceiling reached while it was away -- that
                 # inheritance is what made a return take half a minute to correct.
                 self._retry = 0.0
-                next_assert = min(
-                    next_assert or float("inf"), time.monotonic() + 0.2
-                )
+                next_assert = min(next_assert or float("inf"), time.monotonic() + 0.2)
                 continue
 
             now = time.monotonic()

@@ -23,9 +23,7 @@ def test_a_single_collection_is_aliased_to_both_usages(monkeypatch):
 
 
 def test_unknown_receivers_still_get_a_usable_label(monkeypatch):
-    fakehid.install(
-        monkeypatch, fakehid.FakeReceiver([fakehid.mx_keys_s()], product_id=0xABCD)
-    )
+    fakehid.install(monkeypatch, fakehid.FakeReceiver([fakehid.mx_keys_s()], product_id=0xABCD))
     assert hidpp.find_groups()[0].label == "USB Receiver"
 
 
@@ -48,9 +46,7 @@ def test_a_stale_hint_falls_back_to_the_scan(transport):
 
 def test_direct_connect_index_is_probed(monkeypatch):
     """Bluetooth and cable-attached devices answer on 0xFF, not a receiver slot."""
-    fakehid.install(
-        monkeypatch, fakehid.FakeReceiver([fakehid.mx_keys_s(index=p.INDEX_DIRECT)])
-    )
+    fakehid.install(monkeypatch, fakehid.FakeReceiver([fakehid.mx_keys_s(index=p.INDEX_DIRECT)]))
     transport = hidpp.open_transport(hidpp.find_groups()[0])
     try:
         devices = hidpp.discover_devices(transport)

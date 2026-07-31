@@ -28,7 +28,14 @@ classifiers = [
 dependencies = ["hidapi>=0.14"]
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "ruff>=0.5", "mypy>=1.8"]
+dev = [
+    "pytest>=7",
+    "pytest-cov>=4",
+    "pytest-timeout>=2.2",
+    "hypothesis>=6.90",
+    "ruff>=0.5",
+    "mypy>=1.8",
+]
 
 [project.scripts]
 logiswitch = "logiswitch.cli:main"
@@ -56,7 +63,40 @@ ignore = ["E501", "B008"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# -ra surfaces skip/xfail reasons; the strict flags turn a typo in a marker or a
+# stale config key into an error rather than a silently ignored line.
+addopts = "-ra --strict-markers --strict-config"
+xfail_strict = true
 filterwarnings = ["error"]
+# This suite drives real threads. Without a ceiling a deadlock hangs CI until the
+# job times out with no clue which test was responsible.
+timeout = 120
+timeout_method = "thread"
+markers = [
+    "slow: takes more than a second; still runs by default",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["logiswitch"]
+parallel = true
+# Windows and macOS runners record different absolute paths; without this the
+# combined report treats them as unrelated files and the merge is meaningless.
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "class .*\\(Protocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
+# Platform-specific ctypes watchers cannot both be imported on one machine; the
+# CI matrix covers each on its own OS and the combined report reflects that.
+omit = ["logiswitch/__main__.py"]
 
 [tool.mypy]
 ignore_missing_imports = true

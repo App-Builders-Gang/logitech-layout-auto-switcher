@@ -1,0 +1,23 @@
+version: 2
+updates:
+  # Pinned action majors still move underneath you; this is the supply-chain
+  # surface most likely to go stale in a repo that ships install one-liners.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "deps"
+    groups:
+      dev-dependencies:
+        dependency-type: development

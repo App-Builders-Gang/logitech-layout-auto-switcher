@@ -1,11 +1,11 @@
 """logiswitch command line.
 
-    logiswitch status              what each attached device is currently set to
-    logiswitch set mac|win|...     switch every supported device once
-    logiswitch watch               run the agent in the foreground
-    logiswitch install             start the agent at logon
-    logiswitch uninstall           remove it
-    logiswitch probe               full HID++ dump, for bug reports
+logiswitch status              what each attached device is currently set to
+logiswitch set mac|win|...     switch every supported device once
+logiswitch watch               run the agent in the foreground
+logiswitch install             start the agent at logon
+logiswitch uninstall           remove it
+logiswitch probe               full HID++ dump, for bug reports
 """
 
 from __future__ import annotations
@@ -73,7 +73,9 @@ def cmd_status(_args: argparse.Namespace) -> int:
                 print("    no devices answered")
             for device, info in devices:
                 marker = "*" if info.supported else " "
-                print(f"  {marker} [{device.index}] {info.name}  HID++ {info.protocol[0]}.{info.protocol[1]}")
+                print(
+                    f"  {marker} [{device.index}] {info.name}  HID++ {info.protocol[0]}.{info.protocol[1]}"
+                )
                 if not info.supported:
                     print("      cannot switch layout (no 0x4531 / 0x4530)")
                     continue
@@ -147,7 +149,9 @@ def cmd_probe(_args: argparse.Namespace) -> int:
         for group, _transport, devices in opened:
             print(f"\n=== {group} ===")
             for device, info in devices:
-                print(f"\n  device index {device.index}: {info.name} (HID++ {info.protocol[0]}.{info.protocol[1]})")
+                print(
+                    f"\n  device index {device.index}: {info.name} (HID++ {info.protocol[0]}.{info.protocol[1]})"
+                )
                 print(f"    capability: {info.kind}")
                 for option in info.options:
                     print(
@@ -157,7 +161,9 @@ def cmd_probe(_args: argparse.Namespace) -> int:
                     continue
                 for host in (p.HOST_CURRENT, 0, 1, 2):
                     try:
-                        print(f"      getHostPlatform(0x{host:02X}): {device.host_platform_detail(host)}")
+                        print(
+                            f"      getHostPlatform(0x{host:02X}): {device.host_platform_detail(host)}"
+                        )
                     except Exception as exc:
                         print(f"      getHostPlatform(0x{host:02X}): <{exc}>")
     return 0
@@ -229,7 +235,9 @@ def cmd_service_status(_args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("-v", "--verbose", action="store_true", help="debug logging")
-    common.add_argument("--log-file", type=Path, default=None, help="also write a rotating log here")
+    common.add_argument(
+        "--log-file", type=Path, default=None, help="also write a rotating log here"
+    )
 
     parser = argparse.ArgumentParser(prog="logiswitch", description=__doc__, parents=[common])
     parser.add_argument("--version", action="version", version=f"logiswitch {__version__}")
