@@ -75,6 +75,13 @@ jobs:
           python -m logiswitch status || true
           python -m logiswitch probe || true
 
+      - name: Stamp the coverage data with this matrix entry
+        # pytest-cov combines its parallel files at the end of the run, leaving a
+        # single `.coverage`. Every job would upload that same name, so give each
+        # one a suffix `coverage combine` will still recognise.
+        shell: bash
+        run: mv .coverage ".coverage.${{ matrix.os }}.${{ matrix.python-version }}"
+
       - name: Upload coverage data
         uses: actions/upload-artifact@v4
         with:
