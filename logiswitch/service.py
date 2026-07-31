@@ -15,6 +15,7 @@ import logging
 import os
 import plistlib
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -312,6 +313,7 @@ def _macos_status() -> dict:
 
 
 def install(target_os: str | None = None) -> str:
+    """Register the background service. Does not touch PATH (see ensure_on_path)."""
     if is_windows():
         return _windows_install(target_os)
     if is_macos():
@@ -320,6 +322,110 @@ def install(target_os: str | None = None) -> str:
         "automatic service installation is only implemented for Windows and macOS; "
         f"run '{APP_NAME} watch' from your own supervisor instead"
     )
+
+
+# -- put the command on PATH --------------------------------------------------
+
+
+def _entry_point_dir() -> Path:
+    """The directory that holds the runnable ``logiswitch`` for this install."""
+    return Path(sys.prefix) / ("Scripts" if is_windows() else "bin")
+
+
+def _windows_path_parts() -> tuple[list[str], int]:
+    """The user's PATH entries and their registry type, or ([], REG_EXPAND_SZ)."""
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ) as key:
+            current, reg_type = winreg.QueryValueEx(key, "Path")
+    except FileNotFoundError:
+        return [], winreg.REG_EXPAND_SZ
+    return [p.strip() for p in current.split(";")], reg_type
+
+
+def _add_to_list(parts: list[str], entry: str) -> tuple[list[str], bool]:
+    """Append ``entry`` to ``parts`` if not already present (case-insensitive)."""
+    lowered = {p.lower() for p in parts}
+    if entry.lower() in lowered:
+        return parts, False
+    return [*parts, entry], True
+
+
+def _windows_ensure_on_path() -> bool:
+    """Add the venv's Scripts dir to the user PATH. Returns whether it changed."""
+    import winreg
+
+    target = str(_entry_point_dir())
+    parts, reg_type = _windows_path_parts()
+    parts, changed = _add_to_list(parts, target)
+    if not changed:
+        return False
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_WRITE) as key:
+            winreg.SetValueEx(key, "Path", 0, reg_type or winreg.REG_EXPAND_SZ, ";".join(parts))
+    except OSError as exc:  # pragma: no cover - needs a real registry to fail
+        raise ServiceError(f"could not update the user PATH: {exc}") from exc
+    # winreg writes silently; broadcast WM_SETTINGCHANGE so Explorer (and the
+    # terminals it launches) pick up the new PATH without a logoff. This is what
+    # `setx` and [Environment]::SetEnvironmentVariable do internally.
+    _broadcast_environment_change()
+    return True
+
+
+def _broadcast_environment_change() -> None:
+    import ctypes
+
+    HWND_BROADCAST = 0xFFFF
+    WM_SETTINGCHANGE = 0x001A
+    # SendMessageTimeoutW returns 0 on timeout; the return value is irrelevant --
+    # a terminal that did not listen still reads the registry at launch.
+    ctypes.windll.user32.SendMessageTimeoutW(
+        HWND_BROADCAST, WM_SETTINGCHANGE, 0, "Environment", 0x2, 1000, None
+    )
+
+
+def _macos_ensure_on_path() -> bool:
+    """Symlink ``logiswitch`` into ~/.local/bin. Returns whether a link was (re)made."""
+    target = _entry_point_dir() / APP_NAME
+    if not target.exists():
+        return False
+    bin_dir = Path.home() / ".local" / "bin"
+    link = bin_dir / APP_NAME
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        if link.is_symlink() or link.exists():
+            if link.resolve() == target.resolve():
+                return False
+            link.unlink()
+        link.symlink_to(target)
+    except OSError as exc:  # pragma: no cover - filesystem-dependent
+        raise ServiceError(f"could not link {link}: {exc}") from exc
+    return True
+
+
+def ensure_on_path() -> bool:
+    """Make ``logiswitch`` callable by name from any new terminal.
+
+    On Windows this appends the venv's ``Scripts`` directory to the persistent
+    user PATH; on macOS it symlinks the entry point into ``~/.local/bin``. The
+    change only affects terminals opened afterwards -- the running shell keeps
+    the PATH it started with.
+    """
+    if is_windows():
+        return _windows_ensure_on_path()
+    if is_macos():
+        return _macos_ensure_on_path()
+    return False
+
+
+def path_hint() -> str:
+    """What to tell the user about opening a new shell, if anything."""
+    if is_macos():
+        bin_dir = Path.home() / ".local" / "bin"
+        if str(bin_dir) not in os.environ.get("PATH", "").split(":"):
+            return f"add {bin_dir} to your PATH, then open a new terminal"
+    return "open a new terminal for 'logiswitch' to be on PATH"
 
 
 def uninstall() -> list[str]:

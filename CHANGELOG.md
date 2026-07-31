@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.0.5 — 2026-07-31
+
+### Fixed
+
+- **The `logiswitch` command was not on PATH after install.** The installer built
+  the venv and registered the service but never exposed the entry point, so
+  `logiswitch update`, `logiswitch status` and friends failed with "not recognized"
+  unless invoked as `python -m logiswitch`. `logiswitch install` now adds the
+  venv's Scripts directory to the persistent user PATH on Windows (broadcasting
+  `WM_SETTINGCHANGE` so new terminals pick it up without a logoff) and symlinks
+  the entry point into `~/.local/bin` on macOS. Existing installs pick this up by
+  re-running the install one-liner once; the change is idempotent.
+
 ## 2.0.4 — 2026-07-31
 
 ### Added

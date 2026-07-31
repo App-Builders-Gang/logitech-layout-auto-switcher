@@ -201,10 +201,13 @@ def cmd_install(args: argparse.Namespace) -> int:
     target = p.normalise_os(args.os) if args.os else None
     try:
         what = service.install(target)
+        on_path = service.ensure_on_path()
     except service.ServiceError as exc:
         print(f"install failed: {exc}", file=sys.stderr)
         return 1
     print(f"installed {what}")
+    if on_path:
+        print(f"added 'logiswitch' to PATH ({service.path_hint()})")
     print(f"log: {log_path()}")
     state = service.status()
     if state.get("installed"):

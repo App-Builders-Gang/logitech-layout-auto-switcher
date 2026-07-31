@@ -171,13 +171,28 @@ def test_watch_rejects_an_unknown_target_os(receiver, capsys):
 
 def test_install_reports_what_it_registered(monkeypatch, capsys):
     monkeypatch.setattr(service, "install", lambda target=None: f"thing for {target}")
+    monkeypatch.setattr(service, "ensure_on_path", lambda: True)
+    monkeypatch.setattr(service, "path_hint", lambda: "open a new terminal")
     monkeypatch.setattr(service, "status", lambda: {"installed": True, "state": "Running"})
 
     code, out, _err = run(capsys, "install", "--os", "mac")
 
     assert code == 0
     assert "thing for macos" in out
+    assert "added 'logiswitch' to PATH" in out
+    assert "open a new terminal" in out
     assert "Running" in out
+
+
+def test_install_does_not_mention_path_when_already_there(monkeypatch, capsys):
+    monkeypatch.setattr(service, "install", lambda target=None: "scheduled task")
+    monkeypatch.setattr(service, "ensure_on_path", lambda: False)
+    monkeypatch.setattr(service, "status", lambda: {"installed": True, "state": "Running"})
+
+    code, out, _err = run(capsys, "install")
+
+    assert code == 0
+    assert "PATH" not in out
 
 
 def test_install_surfaces_a_failure(monkeypatch, capsys):
@@ -185,6 +200,7 @@ def test_install_surfaces_a_failure(monkeypatch, capsys):
         raise service.ServiceError("launchctl said no")
 
     monkeypatch.setattr(service, "install", boom)
+    monkeypatch.setattr(service, "ensure_on_path", lambda: False)
 
     code, _out, err = run(capsys, "install")
 
