@@ -1,0 +1,15 @@
+# Normalise text in the repository.
+* text=auto
+
+# Shell scripts must keep LF even when checked out on Windows: the one-line
+# installer is fetched raw and piped to bash, and CRLF would break it with
+# "bash: \r: command not found".
+*.sh text eol=lf
+
+# PowerShell is happy either way, but keep it consistent for Windows users.
+*.ps1 text eol=crlf
+
+# Never let Git rewrite these.
+*.png binary
+*.gif binary
+*.ico binary
