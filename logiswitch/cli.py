@@ -23,6 +23,7 @@ from .agent import Agent, AgentConfig
 from .hidpp import protocol as p
 from .paths import (
     default_target_os,
+    is_managed,
     log_path,
     setup_logging,
     state_path,
@@ -278,7 +279,9 @@ def main(argv: list[str] | None = None) -> int:
     file_log = args.log_file
     if file_log is None and args.command == "watch" and not args.once:
         file_log = log_path()
-    setup_logging(args.verbose, file_log)
+    # Under launchd our stderr is redirected to a file already; a console handler on
+    # top of the file handler would log everything twice.
+    setup_logging(args.verbose, file_log, console=not is_managed())
     try:
         return args.func(args)
     except KeyboardInterrupt:

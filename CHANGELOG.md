@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.0.1 — 2026-07-31
+
+Three macOS defects, all found in one reinstall on real Apple hardware.
+
+### Fixed
+
+- **Reinstalling over a running agent failed** with
+  `install failed: launchctl failed (5): Bootstrap failed: 5: Input/output error`,
+  leaving a plist on disk and nothing running. `launchctl bootout` returns as soon
+  as SIGTERM is delivered, but the label stays registered in the domain until the
+  process is really gone, and bootstrapping a still-registered label returns EIO.
+  Registration now enables the label, boots it out, waits for it to leave the
+  domain, and retries the bootstrap with backoff. Failures report launchctl's error
+  plus a usable hint — launchctl's own "try re-running as root" advice is wrong for
+  a per-user LaunchAgent.
+- **The IOKit watcher never started on any Mac.** The terminate notification was
+  registered as `IOServiceTerminated`; `IOKitKeys.h` spells it `IOServiceTerminate`,
+  so `IOServiceAddMatchingNotification` returned `kIOReturnUnsupported` (0xE00002C7)
+  and every macOS install silently fell back to the 2-second polling watcher. This
+  is the "known limitation" from 2.0.0 — the watcher is now exercised on real
+  hardware and switches on the device event.
+- **Every log line was written twice.** The LaunchAgent redirected the process's
+  stdout and stderr into the same file the agent's own rotating handler writes.
+  launchd's capture now goes to `~/Library/Logs/logiswitch.launchd.log`, which holds
+  only what escapes the logger, and the agent drops its console handler when it
+  detects it is the managed service.
+
 ## 2.0.0 — 2026-07-31
 
 Full rewrite around OS device notifications.

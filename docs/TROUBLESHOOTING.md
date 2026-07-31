@@ -85,10 +85,27 @@ error.
 ```bash
 launchctl print gui/$(id -u)/com.appbuildersgang.logiswitch
 tail -40 ~/Library/Logs/logiswitch.log
+tail -40 ~/Library/Logs/logiswitch.launchd.log   # crashes before logging starts
 ```
 
 A non-zero exit with no log usually means the venv's Python moved. Re-run
 `./install.sh`.
+
+---
+
+## macOS: `install failed: Bootstrap failed: 5: Input/output error`
+
+launchd still had the old agent registered when the installer tried to load the new
+one. The installer now waits for the teardown and retries, so re-running
+`./install.sh` is the fix. If it persists, clear the label by hand and try again:
+
+```bash
+launchctl bootout gui/$(id -u)/com.appbuildersgang.logiswitch
+launchctl enable gui/$(id -u)/com.appbuildersgang.logiswitch
+```
+
+Ignore launchctl's own "Try re-running the command as root" hint — this is a
+per-user LaunchAgent and root targets a different domain.
 
 ---
 

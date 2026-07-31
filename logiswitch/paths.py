@@ -13,6 +13,9 @@ APP_NAME = "logiswitch"
 SERVICE_LABEL = "com.appbuildersgang.logiswitch"
 #: v1 registered itself under this name; installers remove it on upgrade.
 LEGACY_TASK_NAME = "MXSwitch"
+#: Set in the LaunchAgent plist. Tells the agent its stderr is already being captured,
+#: so it should not also echo to the console.
+MANAGED_ENV_VAR = "LOGISWITCH_MANAGED"
 
 
 def is_windows() -> bool:
@@ -45,6 +48,21 @@ def log_path() -> Path:
     if is_macos():
         return Path.home() / "Library" / "Logs" / f"{APP_NAME}.log"
     return data_dir() / f"{APP_NAME}.log"
+
+
+def launchd_stdio_path() -> Path:
+    """Where launchd dumps the agent's raw stdout/stderr.
+
+    Deliberately not :func:`log_path`: the agent logs there itself, and having launchd
+    redirect the same stream into the same file writes every line twice. This one holds
+    only what escapes the logger -- tracebacks from a failed import, mostly.
+    """
+    return log_path().with_name(f"{APP_NAME}.launchd.log")
+
+
+def is_managed() -> bool:
+    """True when running as the installed background agent."""
+    return os.environ.get(MANAGED_ENV_VAR) == "1"
 
 
 def state_path() -> Path:

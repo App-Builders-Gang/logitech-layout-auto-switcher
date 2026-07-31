@@ -16,14 +16,17 @@ import os
 import plistlib
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from .paths import (
     APP_NAME,
     LEGACY_TASK_NAME,
+    MANAGED_ENV_VAR,
     SERVICE_LABEL,
     is_macos,
     is_windows,
+    launchd_stdio_path,
     log_path,
     python_executable,
 )
@@ -31,6 +34,16 @@ from .paths import (
 log = logging.getLogger(__name__)
 
 TASK_NAME = "LogiSwitch"
+
+#: How long to wait for launchd to finish tearing a booted-out job down. ``bootout``
+#: returns as soon as SIGTERM is delivered, but the label stays registered in the
+#: domain until the process is really gone -- and bootstrapping a still-registered
+#: label fails with EIO.
+UNLOAD_TIMEOUT = 10.0
+UNLOAD_POLL_INTERVAL = 0.25
+#: Sleep before each bootstrap attempt. The first is free; the rest cover a teardown
+#: that outlives UNLOAD_TIMEOUT or a domain that is momentarily busy.
+BOOTSTRAP_DELAYS = (0.0, 0.5, 1.0, 2.0, 4.0)
 
 _TASK_XML = """<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -177,12 +190,57 @@ def _launchctl_domain() -> str:
     return f"gui/{getuid()}"
 
 
+def _service_print(target: str) -> subprocess.CompletedProcess:
+    return _run(["launchctl", "print", target], check=False)
+
+
+def _service_registered(target: str) -> bool:
+    """Is the label still known to the domain? Registered != running."""
+    return _service_print(target).returncode == 0
+
+
+def _wait_until_unloaded(target: str, timeout: float = UNLOAD_TIMEOUT) -> bool:
+    """Poll until launchd has dropped ``target``. False if it is still there."""
+    deadline = time.monotonic() + timeout
+    while _service_registered(target):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(UNLOAD_POLL_INTERVAL)
+    return True
+
+
+def _bootstrap(domain: str, target: str, path: Path) -> None:
+    """Bootstrap the plist, retrying while launchd is still letting go of the label."""
+    last: subprocess.CompletedProcess | None = None
+    for delay in BOOTSTRAP_DELAYS:
+        if delay:
+            time.sleep(delay)
+        last = _run(["launchctl", "bootstrap", domain, str(path)], check=False)
+        if last.returncode == 0:
+            return
+        # A concurrent installer -- or launchd itself, reacting to the plist -- may
+        # have registered the label between our bootout and this attempt. Loaded is
+        # loaded; that is the outcome we wanted.
+        if _service_registered(target):
+            return
+    detail = (last.stderr or last.stdout).strip() if last else ""
+    raise ServiceError(
+        f"launchctl bootstrap failed after {len(BOOTSTRAP_DELAYS)} attempts: {detail}\n"
+        f"    This is a per-user LaunchAgent -- do NOT re-run as root.\n"
+        f"    Try:  launchctl bootout {target}\n"
+        f"    then re-run the install. 'launchctl print {domain}' lists what is loaded."
+    )
+
+
 def _macos_install(target_os: str | None) -> str:
     executable = str(python_executable())
     arguments = [executable, "-m", APP_NAME, "watch"]
     if target_os:
         arguments += ["--os", target_os]
-    logfile = str(log_path())
+    # launchd's own stdio capture goes to a separate file: the agent writes its log
+    # itself, and pointing both at one path doubles every line. This one only ever
+    # holds crashes that happen before logging is configured.
+    stdio = str(launchd_stdio_path())
 
     plist = {
         "Label": SERVICE_LABEL,
@@ -190,20 +248,27 @@ def _macos_install(target_os: str | None) -> str:
         "RunAtLoad": True,
         "KeepAlive": True,
         "ProcessType": "Background",
-        "StandardErrorPath": logfile,
-        "StandardOutPath": logfile,
-        "EnvironmentVariables": {"PYTHONUNBUFFERED": "1"},
+        "StandardErrorPath": stdio,
+        "StandardOutPath": stdio,
+        "EnvironmentVariables": {"PYTHONUNBUFFERED": "1", MANAGED_ENV_VAR: "1"},
     }
     path = _plist_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    Path(logfile).parent.mkdir(parents=True, exist_ok=True)
+    log_path().parent.mkdir(parents=True, exist_ok=True)
+    Path(stdio).parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as handle:
         plistlib.dump(plist, handle)
 
     domain = _launchctl_domain()
-    _run(["launchctl", "bootout", f"{domain}/{SERVICE_LABEL}"], check=False)
-    _run(["launchctl", "bootstrap", domain, str(path)])
-    _run(["launchctl", "kickstart", "-k", f"{domain}/{SERVICE_LABEL}"], check=False)
+    target = f"{domain}/{SERVICE_LABEL}"
+    # A label that was ever `launchctl disable`d keeps a sticky override that fails
+    # bootstrap with the same EIO; enabling is idempotent and harmless otherwise.
+    _run(["launchctl", "enable", target], check=False)
+    _run(["launchctl", "bootout", target], check=False)
+    if not _wait_until_unloaded(target):
+        log.warning("%s is still registered after bootout; bootstrapping anyway", target)
+    _bootstrap(domain, target, path)
+    _run(["launchctl", "kickstart", "-k", target], check=False)
     return f"launch agent '{SERVICE_LABEL}'"
 
 
@@ -226,7 +291,7 @@ def _macos_uninstall() -> list[str]:
 def _macos_status() -> dict:
     if not _plist_path().exists():
         return {"installed": False}
-    result = _run(["launchctl", "print", f"{_launchctl_domain()}/{SERVICE_LABEL}"], check=False)
+    result = _service_print(f"{_launchctl_domain()}/{SERVICE_LABEL}")
     if result.returncode != 0:
         return {"installed": True, "state": "not loaded"}
     state = "running"

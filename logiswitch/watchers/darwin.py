@@ -28,7 +28,9 @@ KERN_SUCCESS = 0
 kCFStringEncodingUTF8 = 0x08000100
 kCFNumberSInt32Type = 3
 kIOMatchedNotification = b"IOServiceMatched"
-kIOTerminatedNotification = b"IOServiceTerminated"
+#: IOKitKeys.h spells this "IOServiceTerminate" -- no trailing "d". Anything else makes
+#: IOServiceAddMatchingNotification return kIOReturnUnsupported (0xE00002C7).
+kIOTerminatedNotification = b"IOServiceTerminate"
 
 
 def _load(framework: str, path: str) -> ctypes.CDLL:
@@ -201,15 +203,18 @@ class DarwinWatcher:
                 (kIOTerminatedNotification, self._native_terminated),
             ):
                 iterator = ctypes.c_uint32(0)
+                matching = self._matching_dict()
                 result = fw.iokit.IOServiceAddMatchingNotification(
                     ctypes.c_void_p(self._port),
                     notification_type,
-                    self._matching_dict(),
+                    matching,
                     ctypes.cast(trampoline, ctypes.c_void_p),
                     None,
                     ctypes.byref(iterator),
                 )
                 if result != KERN_SUCCESS:
+                    # The reference is only consumed on success.
+                    fw.cf.CFRelease(matching)
                     raise OSError(
                         f"IOServiceAddMatchingNotification({notification_type.decode()}) "
                         f"failed: 0x{result & 0xFFFFFFFF:08X}"
