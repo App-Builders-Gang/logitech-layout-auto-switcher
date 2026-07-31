@@ -57,10 +57,15 @@ and the harness now fails on the things that used to slip through silently.
 
 - Four agent tests waited a fixed 400 ms for the agent to establish a session
   before asserting, which is not long enough on a loaded macOS CI runner and made
-  two of them fail intermittently. They now wait for the session itself. The
-  failure was also self-inflicted: with no session established the agent
-  deliberately treats *any* device chatter as "something came back", so asserting
-  too early changed the very behaviour under test.
+  two of them fail intermittently. Waiting on the session was not enough either:
+  it is established at the end of session building, still a whole device scan
+  before any platform is read, so a test could flip the platform while the
+  agent's own first pass was in flight and the agent would correctly put it back.
+  The agent now counts completed passes, and the tests wait on that — which makes
+  them deterministic rather than merely slower. The failure was self-inflicted in
+  a second way too: with no session established the agent deliberately treats
+  *any* device chatter as "something came back", so asserting too early changed
+  the very behaviour under test.
 
 ## 2.0.2 — 2026-07-31
 
