@@ -21,10 +21,12 @@
     .\install.ps1 -Uninstall
     .\install.ps1 -TargetOs macos
 #>
-[CmdletBinding()]
+# No [CmdletBinding()] and no [ValidateSet] here on purpose: when this script is
+# piped through `iex`, parameter attributes are applied to the caller's scope and
+# an empty default would be rejected before the body ever runs. The target OS is
+# validated explicitly below instead.
 param(
     [switch]$Uninstall,
-    [ValidateSet('windows', 'macos', 'linux', 'android', 'ios', 'chrome')]
     [string]$TargetOs = $env:LOGISWITCH_OS,
     [string]$InstallDir = $(if ($env:LOGISWITCH_HOME) { $env:LOGISWITCH_HOME } else { Join-Path $env:LOCALAPPDATA 'LogiSwitch' }),
     [string]$Ref = $(if ($env:LOGISWITCH_REF) { $env:LOGISWITCH_REF } else { 'main' })
@@ -32,6 +34,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $Repo = 'App-Builders-Gang/logitech-layout-auto-switcher'
+
+$ValidTargets = @('windows', 'macos', 'linux', 'android', 'ios', 'chrome',
+                  'win', 'mac', 'pc', 'osx', 'darwin', 'chromeos')
+if ($TargetOs) {
+    $TargetOs = $TargetOs.Trim().ToLower()
+    if ($ValidTargets -notcontains $TargetOs) {
+        throw "Unknown target OS '$TargetOs'. Choose one of: $($ValidTargets -join ', ')"
+    }
+}
 
 function Write-Step($m) { Write-Host "==> $m" -ForegroundColor Cyan }
 function Write-Ok($m)   { Write-Host "    $m" -ForegroundColor Green }
@@ -92,6 +103,9 @@ if ($Uninstall) {
         Write-Ok "removed $InstallDir"
     }
     Write-Ok 'Done.'
+    # schtasks leaves a non-zero code behind when it queried a task that was not
+    # there; do not let that read as a failed uninstall.
+    $global:LASTEXITCODE = 0
     return
 }
 
@@ -160,3 +174,4 @@ if ($FromCheckout) {
 } else {
     Write-Host "  uninstall: `$env:LOGISWITCH_UNINSTALL='1'; irm https://raw.githubusercontent.com/$Repo/main/install.ps1 | iex"
 }
+$global:LASTEXITCODE = 0
