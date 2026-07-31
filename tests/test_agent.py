@@ -37,19 +37,30 @@ def wait_for_session(agent):
     assert wait_for(lambda: bool(agent._driven)), "agent never established a session"
 
 
-def wait_until_settled(agent, receiver, index=None, platform=0):
-    """Block until the agent has finished its *first* assert, not merely started it.
+def wait_until_settled(agent, receiver=None, index=None, platform=None):
+    """Block until the agent has *finished* a pass, not merely started one.
 
-    ``_driven`` is populated while the session is being built, before the initial
-    ``ensure_os`` runs. A test that flips the platform the moment ``_driven``
-    appears is racing that first assert, which then quietly puts the platform back
-    -- so the test either fails, or passes for entirely the wrong reason.
+    Two weaker signals were tried first and both let the race through:
+
+    * a fixed 400 ms sleep -- too short on a loaded CI runner;
+    * ``_driven`` becoming non-empty -- populated at the end of session building,
+      which is still a whole device scan before any platform is read.
+
+    A test that flips the platform in that window is racing the agent's own first
+    pass, which then quietly puts the platform back. Waiting on the completed-pass
+    counter is the only signal that actually means "the agent is done".
     """
-    index = fakehid.MX_KEYS_INDEX if index is None else index
-    wait_for_session(agent)
-    assert wait_for(lambda: receiver.devices[index].platform == platform), (
-        "the agent never completed its initial assert"
+    # Both conditions matter: the counter also ticks for a pass that found no
+    # endpoint at all, and the "ignore chatter" rule only engages once the agent
+    # knows what it drives.
+    assert wait_for(lambda: agent._apply_count >= 1 and bool(agent._driven)), (
+        "the agent never completed a pass over a device it drives"
     )
+    if receiver is not None and platform is not None:
+        index = fakehid.MX_KEYS_INDEX if index is None else index
+        assert wait_for(lambda: receiver.devices[index].platform == platform), (
+            f"device {index} never reached platform {platform}"
+        )
 
 
 def test_assert_once_switches_and_cleans_up(receiver, tmp_path):

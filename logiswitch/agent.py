@@ -85,6 +85,8 @@ class Agent:
         #: Device indices we drive. Read from reader threads, rebound (never
         #: mutated) from the worker, so no lock is needed.
         self._driven: frozenset[int] = frozenset()
+        #: Completed passes of :meth:`_apply`. Observability only; never a decision.
+        self._apply_count = 0
         self._hints: dict[str, int] = self._load_hints()
         self._retry = 0.0
         self._changes_in_a_row = 0
@@ -288,6 +290,19 @@ class Agent:
     # -- the actual work ------------------------------------------------------
 
     def _apply(self) -> bool:
+        """Run one full check-and-correct pass over every attached device.
+
+        The counter is bumped on every exit path, successful or not. It is the only
+        way to observe from outside that a pass has *finished* rather than merely
+        started -- ``_driven`` is populated while the session is still being built,
+        which is a whole device scan before any platform is read.
+        """
+        try:
+            return self._apply_once()
+        finally:
+            self._apply_count += 1
+
+    def _apply_once(self) -> bool:
         if not self._sessions:
             self._build_sessions()
         if not self._sessions:
