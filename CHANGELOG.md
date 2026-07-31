@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.0.3 — 2026-07-31
+
+### Fixed
+
+- **Upgrading on Windows left the old build running.** `schtasks /Create /F`
+  replaces a task's registration but does not stop an instance that is already
+  running, so re-installing over a live agent kept the previous process resident
+  until the next logon — it went on using the settings it started with while the
+  new code sat unused on disk. Caught after 2.0.2: the freshly installed agent
+  reported `reassert=600s`, the 2.0.1 default, when 2.0.2 had already lowered it
+  to 20 s. Registration now ends any running instance before replacing the task.
+
+  This is the Windows counterpart of the `launchctl bootout` race fixed on macOS
+  in 2.0.1, and it has the same symptom: the installer says it succeeded while
+  the machine keeps running the old build.
+
+### Added
+
+- `tests/test_service_windows.py` — drives registration against a scripted
+  `schtasks` and asserts the ordering (`/End` before `/Create`, `/Run` last), so
+  the sequence is pinned rather than assumed.
+
 ## 2.0.2 — 2026-07-31
 
 Switching a keyboard to another machine and back left the layout wrong for up to

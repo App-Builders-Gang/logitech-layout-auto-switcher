@@ -144,6 +144,11 @@ def _windows_install(target_os: str | None) -> str:
     temp = Path(name)
     try:
         temp.write_bytes(xml.encode("utf-16"))
+        # /Create /F replaces the registration but leaves a running instance alone,
+        # so upgrading over a live agent kept the previous build resident until the
+        # next logon -- it went on logging the old settings while the new code sat
+        # unused on disk. End it first, then start the replacement.
+        _run(["schtasks", "/End", "/TN", TASK_NAME], check=False)
         _run(["schtasks", "/Create", "/TN", TASK_NAME, "/XML", str(temp), "/F"])
     finally:
         temp.unlink(missing_ok=True)
