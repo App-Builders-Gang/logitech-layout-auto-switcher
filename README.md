@@ -282,6 +282,10 @@ Protocol groundwork stands on [Solaar](https://github.com/pwr-Solaar/Solaar),
 The MX Keys illustration in the banner is **“FREE - Logitech MX Keys - Vector”**
 by **David Pokorný (@davidpokornys)**, published on the Figma Community. It is
 used here cropped to the keyboard and re-optimised; see
-[`assets/keyboard-mx-keys.svg`](assets/keyboard-mx-keys.svg). *Logitech*, *logi*
-and *MX Keys* are trademarks of Logitech, used only to identify the hardware this
-project drives — this project is not affiliated with or endorsed by Logitech.
+[`assets/keyboard-mx-keys.svg`](assets/keyboard-mx-keys.svg).
+
+*Logitech*, *logi* and *MX Keys* are trademarks of Logitech; the Apple logo and
+the Windows logo are trademarks of Apple Inc. and Microsoft Corporation. They
+appear here only to identify the hardware this project drives and the platforms it
+targets. This project is not affiliated with, endorsed by, or sponsored by any of
+them.

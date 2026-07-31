@@ -94,8 +94,33 @@ KEYBOARD = ASSETS / "keyboard-mx-keys.svg"
 #: against real keycaps rather than guessed at.
 KB_VIEWBOX = (145, 292, 1712, 552)
 #: The dual-legend cluster on the bottom row: opt/start and cmd/alt share a keycap,
-#: and which legend is live is exactly what this project switches.
-KB_DUAL_LEGEND = (263, 742, 215, 68)
+#: and which legend is live is exactly what this project switches. Measured off a
+#: 1:1 render by scanning for the keycap edges, not eyeballed -- a ring that misses
+#: the keys by ten units is obvious to every reader.
+KB_DUAL_LEGEND = (274, 743, 208, 64)
+
+#: Both logos are drawn on a 24x24 grid and scaled to wherever they are needed.
+APPLE_PATH = (
+    "M16.365 1.43c0 1.14-.467 2.24-1.23 3.04-.82.86-2.15 1.52-3.26 1.43-.13-1.1.42-2.27"
+    "1.17-3.02.83-.85 2.27-1.47 3.32-1.45zM20.6 17.02c-.6 1.36-.89 1.97-1.66 3.17-1.08"
+    "1.68-2.6 3.77-4.48 3.79-1.68.01-2.11-1.09-4.38-1.08-2.27.01-2.75 1.1-4.42 1.09-1.88"
+    "-.02-3.32-1.91-4.4-3.59C-1.7 15.7-2 9.68.44 6.5c1.13-1.5 2.9-2.44 4.57-2.44 1.7 0"
+    " 2.77 1.09 4.36 1.09 1.55 0 2.49-1.09 4.46-1.09 1.5 0 3.09.82 4.22 2.23-3.71 2.03"
+    "-3.11 7.33.55 8.73z"
+)
+WINDOWS_PATH = (
+    "M0 3.45 10.35 2.05 10.35 11.6 0 11.6z M11.6 1.85 24 0 24 11.5 11.6 11.5z "
+    "M0 12.85 10.35 12.85 10.35 22.4 0 21z M11.6 12.95 24 12.95 24 24 11.6 22.2z"
+)
+
+
+def _icon(path: str, x: float, y: float, size: float, fill: str) -> str:
+    """Place a 24x24 icon path with its top-left corner at (x, y)."""
+    scale = size / 24.0
+    return (
+        f'<g transform="translate({x},{y}) scale({scale:.4f})"><path d="{path}" fill="{fill}"/></g>'
+    )
+
 
 #: Dark product-card palette. The keyboard is dark in every theme, so the hero and
 #: the social card carry their own background and read identically in light and
@@ -192,19 +217,23 @@ def hero() -> str:
     )
 
     cards = [
-        ("on macOS", "⌘ cmd   ⌥ opt", "platform 1", c["accent"]),
-        ("on Windows", "alt   start", "platform 0", c["accent"]),
-        ("either way", "corrected in ~1 s", "measured, not claimed", c["good"]),
+        (APPLE_PATH, "on macOS", "⌘ cmd   ⌥ opt", "platform 1", c["accent"]),
+        (WINDOWS_PATH, "on Windows", "alt   start", "platform 0", c["accent"]),
+        (None, "either way", "corrected in ~1 s", "measured, not claimed", c["good"]),
     ]
-    for i, (title, keys, note, colour) in enumerate(cards):
+    for i, (icon, title, keys, note, colour) in enumerate(cards):
         x = 48 + i * 562
         body.append(
             f'<rect x="{x}" y="{754}" width="530" height="104" rx="14" fill="{c["panel"]}" '
             f'stroke="{c["edge"]}" stroke-width="1.5"/>'
         )
-        body.append(_text(x + 26, 790, title, fill=c["muted"], size=18, weight=600))
-        body.append(_text(x + 26, 828, keys, fill=c["text"], size=25, family=MONO, weight=700))
-        body.append(_text(x + 504, 828, note, fill=colour, size=15, family=MONO, anchor="end"))
+        text_x = x + 26
+        if icon is not None:
+            body.append(_icon(icon, x + 26, 774, 26, c["text"]))
+            text_x = x + 64
+        body.append(_text(text_x, 790, title, fill=c["muted"], size=18, weight=600))
+        body.append(_text(x + 26, 830, keys, fill=c["text"], size=25, family=MONO, weight=700))
+        body.append(_text(x + 504, 830, note, fill=colour, size=15, family=MONO, anchor="end"))
     return _card_svg(w, h, "".join(body))
 
 
@@ -223,10 +252,13 @@ def social() -> str:
             size=25,
         ),
         _text(72, 228, "Now it does.", fill=c["muted"], size=25),
+        _icon(APPLE_PATH, 72, 268, 26, c["text"]),
+        _text(112, 289, "⇄", fill=c["muted"], size=26, family=MONO),
+        _icon(WINDOWS_PATH, 148, 269, 25, c["text"]),
         _text(
-            72,
-            288,
-            "Mac ⇄ Windows layout · HID++ 0x4531 · no remapping",
+            192,
+            289,
+            "HID++ 0x4531 · no remapping",
             fill=c["accent"],
             size=22,
             family=MONO,

@@ -3,7 +3,7 @@
   Source: "FREE - Logitech MX Keys - Vector (Community)" by David Pokorny
   (@davidpokornys) on the Figma Community. Cropped to the keyboard, the
   prototype backdrop and frame chrome removed, three 1024x1024 noise-texture
-  rasters dropped (invisible at README scale, -1.3 MB), then svgo --precision=2.
+  rasters dropped (invisible at README scale, -1.3 MB), then svgo at precision 2.
   Rebuild with tools/make_assets.py; see README credits for attribution.
   "logi" and "MX Keys" are trademarks of Logitech; used here to depict the
   hardware this project drives.
