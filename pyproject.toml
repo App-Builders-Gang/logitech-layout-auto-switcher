@@ -61,3 +61,8 @@ filterwarnings = ["error"]
 [tool.mypy]
 ignore_missing_imports = true
 warn_unused_ignores = true
+# The Windows watcher uses ctypes.WINFUNCTYPE / WinDLL, which typeshed marks as
+# win32-only. Pinning the assumed platform lets a single pass type-check the
+# whole tree from any host, including the Linux CI runner. The macOS watcher
+# only uses cross-platform ctypes APIs, so it is covered either way.
+platform = "win32"

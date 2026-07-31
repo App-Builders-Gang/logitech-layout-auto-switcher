@@ -169,7 +169,12 @@ def _plist_path() -> Path:
 
 
 def _launchctl_domain() -> str:
-    return f"gui/{os.getuid()}"  # type: ignore[attr-defined]  # macOS-only path
+    # os.getuid does not exist on Windows; this function is only reached on macOS,
+    # and getattr keeps it type-checkable whichever platform mypy assumes.
+    getuid = getattr(os, "getuid", None)
+    if getuid is None:  # pragma: no cover - unreachable on macOS
+        raise ServiceError("launchctl domains are a macOS concept")
+    return f"gui/{getuid()}"
 
 
 def _macos_install(target_os: str | None) -> str:
