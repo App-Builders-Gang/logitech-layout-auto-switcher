@@ -1,5 +1,92 @@
 # Changelog
 
+## 2.1.0 — 2026-08-04
+
+Chasing a keyboard that typed `Î` instead of `⌘⇧D`. The cause turned out to be a
+second machine running an older build of this tool, and almost none of the work
+below is the fix — it is everything that had to exist before the cause could be
+seen at all.
+
+### Fixed
+
+- **A reply that missed its deadline could be handed to the next request.** Every
+  request was stamped with the same software id (`SW_ID = 0x0E`), and the response
+  sink matched on device, feature and function — all of which a late reply shares
+  with the request that follows it. The agent then acted on a stale platform,
+  concluded nothing needed changing, and logged success while the layout was wrong.
+  Reproduced directly: the old code returns a stale `platform 1` as a fresh answer.
+  Software ids now rotate, and a request that gives up is remembered so its answer
+  is rejected when it finally arrives rather than given to whoever is waiting.
+
+- **A failed read became a blind write.** A timed-out `getHostPlatform` set the
+  current platform to "unknown", which never matches the target, so every timeout
+  produced a write and reported `changed=True`. That manufactured corrections that
+  never happened and drove the contention warning purely from a sleeping keyboard.
+
+- **The contention warning could never fire.** It required *consecutive* changes,
+  but every correction is followed three seconds later by a check that succeeds —
+  the agent's own success reset the counter. A keyboard reverted every twelve
+  seconds for two days produced 2178 "switched" lines and not one warning. Counted
+  over a window now.
+
+- **A platform write was never verified.** The reply says the command was accepted,
+  not that the mode took. `ensure_os` now reads back, and a write the device
+  contradicts is logged as a failure instead of announced as a switch.
+
+- **Reconnecting dropped every device but one.** The device-index fast path returned
+  as soon as a single hinted index answered, so a receiver with two keyboards had
+  one of them quietly unmanaged after every reconnect. Invisible with one device.
+
+- **Global flags before the subcommand were discarded.** `logiswitch -v status` ran
+  without debug logging, because argparse copies a subparser's defaults over what
+  the top level already parsed.
+
+- **`0x41` was misread as a connect notification** whenever a HID++ 2.0 reply
+  happened to carry feature index 0x41.
+
+### Added
+
+- **Desktop notifications** on macOS and Windows when the layout changes, when a
+  switch will not stick, when it keeps reverting, when the wireless link is
+  unstable, and when the host input source is not Latin. Throttled per kind: a
+  keyboard reverting every twelve seconds produces one message and then one
+  standing-condition message, not three hundred an hour. `logiswitch notify-test`
+  checks they are permitted, because on macOS the failure is silent.
+
+- **`logiswitch doctor`** — one report naming which of the three causes of wrong
+  characters you have: firmware platform, host input source, or an unstable link.
+  It also detects the macOS Input Monitoring failure, which otherwise looks like
+  missing hardware.
+
+- **Taking turns between machines.** Several computers sharing one keyboard through
+  a KVM each want their own layout, and the keyboard has one platform slot. The
+  machine being typed on now keeps the keyboard and the rest stand down — no
+  configuration and no negotiation, because only one machine can be receiving
+  keystrokes at a time. `--observe`, `--claim-host N` and `--active-window` cover
+  the cases where the automatic behaviour is not wanted. An old build competing for
+  the keyboard is detected by its fixed software id and named in the log.
+
+- **Modifiers are no longer remapped mid-chord.** Changing the platform swaps the
+  bottom row, so doing it between a key's press and its release strands the
+  modifier. The agent now waits for the chord to finish, reading modifier state
+  through APIs that need no permission on either platform.
+
+- **A frame trace** kept in a bounded ring and flushed to disk when something
+  anomalous happens, so an intermittent fault leaves evidence instead of nothing.
+
+- **`docs/RESOURCES.md`** — the protocol references, and the two workarounds this
+  project owes to Solaar, recorded with citations so they are not "simplified" away.
+
+### Internal
+
+**405 tests, up from 209.** The largest addition is a competing test environment:
+ten machines sharing one receiver filled to its six-device limit, with the shared
+receiver modelled faithfully so the agents discover each other the way they do
+through a KVM. It covers fast user switching, thundering herds, mixed OS targets,
+an unyielding old peer, and recovery from sleep, transport loss and a machine
+disappearing. It found two bugs unit tests could not: arbitration was enforced only
+in the worker loop, so `--once` bypassed it, and the reconnect fast path above.
+
 ## 2.0.5 — 2026-07-31
 
 ### Fixed

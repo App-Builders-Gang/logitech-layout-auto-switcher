@@ -60,3 +60,29 @@ def test_probe_devices_pairs_each_device_with_its_capability(transport):
     probed = hidpp.probe_devices(hidpp.discover_devices(transport))
     supported = {info.name: info.supported for _, info in probed}
     assert supported == {"MX Master 3S": False, "MX Keys S": True}
+
+
+def test_every_hinted_device_is_returned_not_just_the_first(receiver, transport):
+    """A reconnect must not silently drop the other devices on the receiver.
+
+    The fast path used to return as soon as one hinted index answered, so a
+    receiver with two keyboards had one of them quietly unmanaged after every
+    reconnect — invisible with a single device, wrong with two.
+    """
+    devices = hidpp.discover_devices(
+        transport, hint=[fakehid.MX_MASTER_INDEX, fakehid.MX_KEYS_INDEX]
+    )
+    assert sorted(d.index for d in devices) == sorted(
+        [fakehid.MX_MASTER_INDEX, fakehid.MX_KEYS_INDEX]
+    )
+
+
+def test_a_single_int_hint_is_still_accepted(receiver, transport):
+    """The on-disk state file held a bare integer before it held a list."""
+    devices = hidpp.discover_devices(transport, hint=fakehid.MX_KEYS_INDEX)
+    assert [d.index for d in devices] == [fakehid.MX_KEYS_INDEX]
+
+
+def test_hints_that_all_miss_fall_back_to_the_scan(transport):
+    devices = hidpp.discover_devices(transport, hint=[3, 4])
+    assert sorted(d.index for d in devices) == [fakehid.MX_MASTER_INDEX, fakehid.MX_KEYS_INDEX]

@@ -119,3 +119,27 @@ def test_uninstall_reports_nothing_when_no_task_exists(monkeypatch):
 
     assert service.uninstall() == []
     assert "delete" not in fake.verbs()
+
+
+def test_no_notify_reaches_the_task_xml(schtasks, monkeypatch):
+    written = {}
+    monkeypatch.setattr(Path, "write_bytes", lambda self, data: written.__setitem__("xml", data))
+    service.install("macos", notify=False)
+    xml = written["xml"].decode("utf-16")
+    assert "--no-notify" in xml
+
+
+def test_the_task_xml_omits_the_flag_when_notifications_stay_on(schtasks, monkeypatch):
+    written = {}
+    monkeypatch.setattr(Path, "write_bytes", lambda self, data: written.__setitem__("xml", data))
+    service.install("macos")
+    xml = written["xml"].decode("utf-16")
+    assert "--no-notify" not in xml
+    assert "-m logiswitch watch --os macos" in xml
+
+
+def test_observe_mode_reaches_the_task_xml(schtasks, monkeypatch):
+    written = {}
+    monkeypatch.setattr(Path, "write_bytes", lambda self, data: written.__setitem__("xml", data))
+    service.install("windows", observe=True)
+    assert "--observe" in written["xml"].decode("utf-16")

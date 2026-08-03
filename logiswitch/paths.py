@@ -51,6 +51,20 @@ def log_path() -> Path:
     return data_dir() / f"{APP_NAME}.log"
 
 
+def trace_path() -> Path:
+    """Where an anomalous frame trace is dumped.
+
+    Its own file, not :func:`log_path`: a trace is thousands of lines and would
+    rotate the surrounding diagnosis straight out of a 512 KiB log.
+    """
+    return log_path().with_name(f"{APP_NAME}.trace.log")
+
+
+def doctor_report_path() -> Path:
+    """Where ``logiswitch doctor`` leaves its report, ready to attach to a bug."""
+    return log_path().with_name(f"{APP_NAME}-doctor.txt")
+
+
 def launchd_stdio_path() -> Path:
     """Where launchd dumps the agent's raw stdout/stderr.
 
@@ -96,7 +110,11 @@ def setup_logging(
             existing.close()
     root.handlers.clear()
     root.propagate = False
-    formatter = logging.Formatter("%(asctime)s %(levelname)-7s %(message)s", "%Y-%m-%d %H:%M:%S")
+    # Milliseconds matter: the races this log exists to diagnose happen inside one
+    # second, and without them a log line cannot be ordered against a frame trace.
+    formatter = logging.Formatter(
+        "%(asctime)s.%(msecs)03d %(levelname)-7s %(message)s", "%Y-%m-%d %H:%M:%S"
+    )
 
     if console:
         handler = logging.StreamHandler(sys.stderr)

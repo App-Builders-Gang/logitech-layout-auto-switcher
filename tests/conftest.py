@@ -68,6 +68,26 @@ def isolated_logging():
         logger.propagate = propagate
 
 
+@pytest.fixture(autouse=True)
+def clean_trace():
+    """Reset the frame ring and health counters around every test.
+
+    Both are process-wide singletons, so without this a test asserting on a counter
+    would be reading whatever the tests before it happened to do.
+    """
+    from logiswitch import trace
+
+    trace.clear()
+    trace.HEALTH.reset()
+    trace.set_dump_path(None)
+    trace.set_echo(False)
+    yield
+    trace.clear()
+    trace.HEALTH.reset()
+    trace.set_dump_path(None)
+    trace.set_echo(False)
+
+
 @pytest.fixture
 def receiver(monkeypatch):
     """A Bolt receiver with an MX Master 3S and an MX Keys S, as on real hardware."""

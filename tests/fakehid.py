@@ -22,6 +22,10 @@ MX_KEYS_INDEX = 5
 MX_MASTER_INDEX = 1
 MULTIPLATFORM_INDEX = 0x10
 DEVICE_NAME_INDEX = 0x03
+HOSTS_INFO_INDEX = 0x06
+
+#: Which Easy-Switch channel the fake keyboard is parked on, as 0x1815 reports it.
+CURRENT_HOST = 0
 
 #: platform index -> OS mask, exactly as the MX Keys S reports it.
 PLATFORM_TABLE = [
@@ -42,6 +46,8 @@ class FakeDevice:
         features: dict[int, int] | None = None,
         platform: int | None = None,
         dual: bool = False,
+        buggy_current_host: bool = False,
+        current_host: int = CURRENT_HOST,
     ):
         self.index = index
         self.name = name
@@ -49,14 +55,36 @@ class FakeDevice:
         self.platform = platform
         self.dual = dual
         self.set_calls: list[int] = []
+        #: Host index of every setHostPlatform, so a test can see what was addressed.
+        self.set_hosts: list[int] = []
         #: When set, the device answers nothing (asleep / other channel).
         self.asleep = False
+        #: Reproduce the MX Keys S firmware bug: a write addressed to host 0xFF is
+        #: acknowledged and then silently discarded. Only a concrete host index
+        #: actually changes the platform. This is the fault Solaar works around.
+        self.buggy_current_host = buggy_current_host
+        self.current_host = current_host
 
 
-def mx_keys_s(index: int = MX_KEYS_INDEX) -> FakeDevice:
+def mx_keys_s(index: int = MX_KEYS_INDEX, buggy_current_host: bool = False) -> FakeDevice:
     return FakeDevice(
         index,
         "MX Keys S",
+        features={
+            p.FEATURE_DEVICE_NAME: DEVICE_NAME_INDEX,
+            p.FEATURE_MULTIPLATFORM: MULTIPLATFORM_INDEX,
+            p.FEATURE_HOSTS_INFO: HOSTS_INFO_INDEX,
+        },
+        platform=0,
+        buggy_current_host=buggy_current_host,
+    )
+
+
+def keyboard_without_hosts_info(index: int = MX_KEYS_INDEX) -> FakeDevice:
+    """Older firmware with no 0x1815, which must keep working on 0xFF alone."""
+    return FakeDevice(
+        index,
+        "MX Keys",
         features={
             p.FEATURE_DEVICE_NAME: DEVICE_NAME_INDEX,
             p.FEATURE_MULTIPLATFORM: MULTIPLATFORM_INDEX,
@@ -83,13 +111,29 @@ class FakeReceiver:
     """Answers HID++ frames the way a Bolt receiver does."""
 
     def __init__(
-        self, devices: list[FakeDevice], product_id: int = BOLT_PID, truncate_replies: bool = False
+        self,
+        devices: list[FakeDevice],
+        product_id: int = BOLT_PID,
+        truncate_replies: bool = False,
+        shared: bool = False,
     ):
         self.devices = {d.index: d for d in devices}
         self.product_id = product_id
         self.handles: list[FakeHandle] = []
         self.writes = 0
         self.lock = threading.Lock()
+        #: Model a receiver shared between machines, as through a KVM: every reply
+        #: reaches every open handle. That is what real hardware does -- the peer's
+        #: setHostPlatform reply is how another machine was identified at all -- and
+        #: without it two agents on one receiver are invisible to each other.
+        self.shared = shared
+        #: Every setHostPlatform, as (owner, host_index, platform). Attributing a
+        #: write to the machine that made it is the only measurement that matters
+        #: when several are contending.
+        self.ledger: list[tuple[str, int, int]] = []
+        #: The handle whose write is currently being served, so `_reply` can record
+        #: who asked without threading an argument through every helper.
+        self._writer: str = "?"
         #: Reply with only the header, no payload. Firmware that answers a feature
         #: it half-implements looks like this, and it must not crash discovery.
         self.truncate_replies = truncate_replies
@@ -148,6 +192,12 @@ class FakeReceiver:
                 return self._pad(frame, device.name.encode()[offset : offset + 16])
             return self._error20(frame, 7)
 
+        if feature_index == device.features.get(p.FEATURE_HOSTS_INFO):
+            if function == p.HI_GET_FEATURE_INFO:
+                # [capabilities, ?, numHosts, currentHost] -- Solaar reads byte 3.
+                return self._pad(frame, bytes([0x00, 0x00, 0x03, device.current_host]))
+            return self._error20(frame, 7)
+
         if feature_index == device.features.get(p.FEATURE_MULTIPLATFORM):
             return self._multiplatform(frame, device, function, params)
 
@@ -157,6 +207,9 @@ class FakeReceiver:
             if function == p.DP_SET_PLATFORM:
                 device.platform = params[0]
                 device.set_calls.append(params[0])
+                # Ledgered like MULTIPLATFORM: a write is a write, whichever feature
+                # made it, and leaving these out understates what a machine did.
+                self.ledger.append((self._writer, p.HOST_CURRENT, params[0]))
                 return self._pad(frame, b"")
             return self._error20(frame, 7)
 
@@ -173,13 +226,19 @@ class FakeReceiver:
             return self._pad(frame, bytes([index, i, mask >> 8, mask & 0xFF, 0, 0, 0, 0]))
         if function == p.MP_GET_HOST_PLATFORM:
             host = params[0] if params else p.HOST_CURRENT
-            host_index = 0 if host == p.HOST_CURRENT else host
-            if host_index > 0:
+            host_index = device.current_host if host == p.HOST_CURRENT else host
+            if host_index != device.current_host:
                 return self._pad(frame, bytes([host_index, 0, 0xFF, 0]))
-            return self._pad(frame, bytes([0, 1, device.platform or 0, 3]))
+            return self._pad(frame, bytes([host_index, 1, device.platform or 0, 3]))
         if function == p.MP_SET_HOST_PLATFORM:
-            device.platform = params[1]
-            device.set_calls.append(params[1])
+            host, platform = params[0], params[1]
+            device.set_hosts.append(host)
+            self.ledger.append((self._writer, host, platform))
+            if device.buggy_current_host and host == p.HOST_CURRENT:
+                # Acknowledged, and then quietly dropped -- the MX Keys S bug.
+                return self._pad(frame, b"")
+            device.platform = platform
+            device.set_calls.append(platform)
             return self._pad(frame, b"")
         return self._error20(frame, 7)
 
@@ -218,9 +277,11 @@ class FakeReceiver:
 
 
 class FakeHandle:
-    def __init__(self, receiver: FakeReceiver, path: bytes):
+    def __init__(self, receiver: FakeReceiver, path: bytes, owner: str = "?"):
         self.receiver = receiver
         self.path = path
+        #: Which machine opened this handle, for the receiver's write ledger.
+        self.owner = owner
         self.inbox: queue.Queue = queue.Queue()
         self.closed = False
         receiver.handles.append(self)
@@ -230,9 +291,18 @@ class FakeHandle:
             raise OSError("write to a closed handle")
         with self.receiver.lock:
             self.receiver.writes += 1
+            self.receiver._writer = self.owner
             reply = self.receiver._reply(bytes(data))
-        if reply is not None:
-            self.inbox.put(reply)
+            shared = self.receiver.shared
+            others = [h for h in self.receiver.handles if h is not self] if shared else []
+        if reply is None:
+            return
+        self.inbox.put(reply)
+        for handle in others:
+            # A shared receiver puts device traffic in front of every host attached
+            # to it. The requester matches this in its sink; to everyone else it is
+            # an orphan -- which is exactly the signal that identifies a peer.
+            handle.inbox.put(reply)
 
     def read(self, size: int, timeout_ms: int) -> bytes:
         if self.closed:
@@ -248,6 +318,12 @@ class FakeHandle:
             self.receiver.handles.remove(self)
 
 
+#: Set by the multi-machine harness so a handle can be attributed to the machine that
+#: opened it. `backend.open_path` takes only a path, and threading an owner through it
+#: would change production code to suit a test.
+current_owner: list[str] = ["?"]
+
+
 def install(monkeypatch, receiver: FakeReceiver, single_collection: bool = False) -> FakeReceiver:
     """Point the backend at `receiver` for the duration of a test."""
     from logiswitch.hidpp import backend
@@ -258,7 +334,7 @@ def install(monkeypatch, receiver: FakeReceiver, single_collection: bool = False
         return receiver.interfaces(single_collection)
 
     def fake_open(path: bytes) -> FakeHandle:
-        return FakeHandle(receiver, path)
+        return FakeHandle(receiver, path, owner=current_owner[0])
 
     monkeypatch.setattr(backend, "enumerate_devices", fake_enumerate)
     monkeypatch.setattr(backend, "open_path", fake_open)

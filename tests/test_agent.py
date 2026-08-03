@@ -4,6 +4,7 @@ import time
 import fakehid
 import pytest
 
+from logiswitch import diagnostics
 from logiswitch.agent import Agent, AgentConfig
 from logiswitch.watchers import DeviceEvent
 
@@ -104,19 +105,67 @@ def test_device_index_hint_is_persisted(receiver, tmp_path):
     Agent(cfg).assert_once()
     assert cfg.state_file.exists()
     reloaded = Agent(cfg)
-    assert reloaded._hints["Logi Bolt receiver"] == fakehid.MX_KEYS_INDEX
+    assert reloaded._hints["Logi Bolt receiver"] == [fakehid.MX_KEYS_INDEX]
 
 
-def test_contention_is_reported_after_repeated_reverts(receiver, tmp_path, caplog):
-    """Simulate Logi Options+ pushing the platform straight back."""
+def _revert_repeatedly(receiver, tmp_path, caplog, rounds=5, settle=False) -> None:
+    """Drive the cycle the real world produces: revert, correct, revert, correct...
+
+    With `settle`, a clean pass runs between every revert -- which is what actually
+    happens, because the agent re-checks three seconds after each correction and
+    finds its own work intact.
+    """
     keyboard = receiver.devices[fakehid.MX_KEYS_INDEX]
     agent = Agent(config(tmp_path))
     with caplog.at_level(logging.WARNING, logger="logiswitch.agent"):
-        for _ in range(3):
+        for _ in range(rounds):
             keyboard.platform = 1  # something else reverted it to macOS
             agent.assert_once()
-    assert any("fighting us" in record.message for record in caplog.records)
-    assert any("Options+" in record.getMessage() for record in caplog.records)
+            if settle:
+                agent.assert_once()  # the 3s re-check: nothing to do
+
+
+def test_a_platform_reverting_forever_is_reported(receiver, tmp_path, caplog):
+    """The regression behind 2178 silent corrections in a real log.
+
+    Every correction is followed by a check that succeeds, so a counter demanding
+    *consecutive* changes was reset by the agent's own success and never once
+    reached its threshold. A keyboard reverted every twelve seconds for two days
+    produced no warning at all.
+    """
+    _revert_repeatedly(receiver, tmp_path, caplog, rounds=6, settle=True)
+    assert any("corrected the platform" in record.getMessage() for record in caplog.records), (
+        "a revert that is corrected each time must still be reported"
+    )
+
+
+def test_the_revert_warning_is_logged_once_not_per_occurrence(receiver, tmp_path, caplog):
+    _revert_repeatedly(receiver, tmp_path, caplog, rounds=12, settle=True)
+    warnings = [r for r in caplog.records if "corrected the platform" in r.getMessage()]
+    assert len(warnings) == 1
+
+
+def _revert_three_times(receiver, tmp_path, caplog) -> None:
+    _revert_repeatedly(receiver, tmp_path, caplog, rounds=5)
+
+
+def test_contention_names_the_software_that_is_actually_running(
+    monkeypatch, receiver, tmp_path, caplog
+):
+    """Simulate Logi Options+ pushing the platform straight back."""
+    monkeypatch.setattr(diagnostics, "competing_software", lambda: ["logioptionsplus_agent"])
+    _revert_three_times(receiver, tmp_path, caplog)
+    assert any("corrected the platform" in record.getMessage() for record in caplog.records)
+    assert any("logioptionsplus_agent" in record.getMessage() for record in caplog.records)
+
+
+def test_contention_does_not_blame_software_that_is_absent(monkeypatch, receiver, tmp_path, caplog):
+    """The old warning asserted Logi Options+ was the cause without ever looking."""
+    monkeypatch.setattr(diagnostics, "competing_software", lambda: [])
+    _revert_three_times(receiver, tmp_path, caplog)
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("corrected the platform" in message for message in messages)
+    assert not any("logioptions" in message.lower() for message in messages)
 
 
 def test_no_contention_warning_in_steady_state(receiver, tmp_path, caplog):
@@ -232,25 +281,229 @@ def test_an_unknown_device_is_heard_when_we_have_none_of_our_own(receiver, tmp_p
 
 
 def test_chatter_from_a_device_we_do_not_drive_is_ignored(receiver, tmp_path):
-    """A mouse sprays movement events; none of them mean the keyboard moved."""
+    """A mouse sprays movement events; none of them mean the keyboard moved.
+
+    Asserted on the queue rather than on the platform. Watching the platform would
+    now be measuring the adaptive re-check instead -- the agent re-reads on its own
+    schedule after a correction, so an unchanged platform would prove nothing about
+    how the chatter was classified.
+    """
     agent = Agent(config(tmp_path, force_polling=True))
-    agent.start()
-    try:
-        wait_until_settled(agent, receiver)
-        assert fakehid.MX_MASTER_INDEX not in agent._driven
-        receiver.devices[fakehid.MX_KEYS_INDEX].platform = 1
-        for _ in range(5):
-            agent._on_hidpp_frame(bytes([0x11, fakehid.MX_MASTER_INDEX, 0x09, 0x20] + [0] * 16))
-        # A reply to one of our own requests must not count either (swId 0x0E).
-        agent._on_hidpp_frame(bytes([0x11, fakehid.MX_KEYS_INDEX, 0x10, 0x1E] + [0] * 16))
-        time.sleep(1.0)
-        assert receiver.devices[fakehid.MX_KEYS_INDEX].platform == 1
-    finally:
-        agent.stop()
-        agent.shutdown()
+    # Pretend a session exists, without the cost and timing of really building one.
+    agent._driven = frozenset({fakehid.MX_KEYS_INDEX})
+
+    for _ in range(5):
+        agent._on_hidpp_frame(bytes([0x11, fakehid.MX_MASTER_INDEX, 0x09, 0x20] + [0] * 16))
+    # A reply to one of our own requests must not count either (swId 0x0E).
+    agent._on_hidpp_frame(bytes([0x11, fakehid.MX_KEYS_INDEX, 0x10, 0x1E] + [0] * 16))
+    assert agent._queue.empty(), "neither mouse chatter nor our own reply is a wake-up"
+
+    # ... whereas an unsolicited frame from the keyboard itself is.
+    agent._on_hidpp_frame(bytes([0x11, fakehid.MX_KEYS_INDEX, 0x10, 0x00] + [0] * 16))
+    kind, _payload = agent._queue.get_nowait()
+    assert kind.value == "device_woke"
 
 
 @pytest.mark.parametrize("target", ["mac", "win", "macos", "windows"])
 def test_target_os_aliases_work_end_to_end(receiver, tmp_path, target):
     agent = Agent(config(tmp_path, target_os=target))
     assert agent.assert_once()
+
+
+# -- link health ---------------------------------------------------------------
+
+
+def _connect_notification(index=fakehid.MX_KEYS_INDEX, established=True):
+    from logiswitch.hidpp import protocol as p
+
+    flags = 0x00 if established else p.NOTIF_LINK_NOT_ESTABLISHED
+    return bytes([0x10, index, p.NOTIF_DEVICE_CONNECTION, 0x04, flags, 0x00, 0x00])
+
+
+def test_repeated_reconnects_are_reported_as_an_unstable_link(receiver, tmp_path, caplog):
+    """The only handle the daemon has on genuinely garbled output.
+
+    It never sees a keystroke, but a link that keeps collapsing is a link dropping
+    and repeating them.
+    """
+    from logiswitch import agent as agent_module
+
+    agent = Agent(config(tmp_path))
+    with caplog.at_level(logging.WARNING, logger="logiswitch.agent"):
+        for _ in range(agent_module.CHURN_THRESHOLD + 1):
+            agent._on_hidpp_frame(_connect_notification())
+    assert any("wireless link has re-established" in r.getMessage() for r in caplog.records)
+
+
+def test_a_single_reconnect_is_not_called_unstable(receiver, tmp_path, caplog):
+    """Switching a KVM produces one reconnect and must stay silent."""
+    agent = Agent(config(tmp_path))
+    with caplog.at_level(logging.WARNING, logger="logiswitch.agent"):
+        agent._on_hidpp_frame(_connect_notification())
+    assert not caplog.records
+
+
+def test_a_dropped_link_is_counted_separately_from_a_reconnect(receiver, tmp_path):
+    from logiswitch import trace
+
+    agent = Agent(config(tmp_path))
+    agent._on_hidpp_frame(_connect_notification(established=False))
+    assert trace.HEALTH.get("link_drops") == 1
+    assert trace.HEALTH.get("reconnects") == 0
+
+
+def test_a_reply_from_feature_index_0x41_is_not_treated_as_a_reconnect(receiver, tmp_path):
+    """Byte 2 is a feature index on a HID++ 2.0 reply, not a sub-id."""
+    from logiswitch import trace
+
+    agent = Agent(config(tmp_path))
+    reply = bytes([0x11, fakehid.MX_KEYS_INDEX, 0x41, 0x2E]) + bytes(16)
+    agent._on_hidpp_frame(reply)
+    assert trace.HEALTH.get("reconnects") == 0
+
+
+# -- the log stays a timeline --------------------------------------------------
+
+
+def test_the_agent_reports_itself_alive_even_when_nothing_changes(receiver, tmp_path, caplog):
+    """A healthy agent used to log one line and then fall silent forever.
+
+    That left "it went wrong at 14:32" with nothing to be checked against.
+    """
+    agent = Agent(config(tmp_path))
+    agent.assert_once()
+    with caplog.at_level(logging.INFO, logger="logiswitch.agent"):
+        agent._log_steady_summary()
+    message = "\n".join(r.getMessage() for r in caplog.records)
+    assert "steady on " in message
+    assert "MX Keys S=" in message
+    assert "input=" in message
+
+
+def test_a_write_that_does_not_take_is_not_logged_as_a_switch(receiver, tmp_path, caplog):
+    """The log must not announce a switch the device contradicted.
+
+    Reporting success there is how a log ends up insisting everything is fine while
+    the wrong characters keep appearing.
+    """
+    from logiswitch.hidpp import protocol as p
+
+    real = receiver._multiplatform
+
+    def acknowledge_but_ignore(frame, dev, function, params):
+        if function == p.MP_SET_HOST_PLATFORM:
+            return receiver._pad(frame, b"")  # accepted; nothing changes
+        return real(frame, dev, function, params)
+
+    receiver._multiplatform = acknowledge_but_ignore
+    receiver.devices[fakehid.MX_KEYS_INDEX].platform = 1  # not the windows target
+    agent = Agent(config(tmp_path))
+    with caplog.at_level(logging.INFO, logger="logiswitch.agent"):
+        ok = agent.assert_once()
+    message = "\n".join(r.getMessage() for r in caplog.records)
+    assert "did NOT switch" in message
+    assert "switched MX Keys S to" not in message
+    assert not ok, "an unapplied write must count as a failed pass so it is retried"
+
+
+# -- notifications -------------------------------------------------------------
+
+
+class _Recorder:
+    def __init__(self):
+        self.sent = []
+
+    def __call__(self, note):
+        self.sent.append(note)
+
+
+def _agent_with_recorder(tmp_path, **kwargs):
+    from logiswitch import notify
+
+    recorder = _Recorder()
+    agent = Agent(config(tmp_path, **kwargs))
+    agent.notifier = notify.Notifier(
+        enabled=agent.cfg.notify, sender=recorder, cooldown=kwargs.pop("cooldown", None)
+    )
+    return agent, recorder
+
+
+def test_a_switch_notifies_once_even_when_it_keeps_reverting(receiver, tmp_path):
+    """The live behaviour on this hardware: correcting every 12s must not spam."""
+    from logiswitch import notify
+
+    keyboard = receiver.devices[fakehid.MX_KEYS_INDEX]
+    agent, recorder = _agent_with_recorder(tmp_path)
+    for _ in range(20):
+        keyboard.platform = 1  # reverted again
+        agent.assert_once()
+    agent.notifier._drain()
+
+    switched = [n for n in recorder.sent if n.kind == notify.SWITCHED]
+    assert len(switched) == 1, f"expected one switch notification, got {len(switched)}"
+    assert "MX Keys S" in switched[0].body
+    assert "layout" in switched[0].body
+
+
+def test_a_persistent_revert_is_reported_as_a_standing_condition(receiver, tmp_path):
+    from logiswitch import notify
+
+    keyboard = receiver.devices[fakehid.MX_KEYS_INDEX]
+    agent, recorder = _agent_with_recorder(tmp_path)
+    for _ in range(20):
+        keyboard.platform = 1
+        agent.assert_once()
+        agent.assert_once()
+    agent.notifier._drain()
+
+    flapping = [n for n in recorder.sent if n.kind == notify.FLAPPING]
+    assert len(flapping) == 1
+    assert "keeps reverting" in flapping[0].body
+    assert "doctor" in flapping[0].body, "it must say what to do next"
+
+
+def test_a_write_that_does_not_take_notifies_differently(receiver, tmp_path):
+    from logiswitch import notify
+    from logiswitch.hidpp import protocol as p
+
+    real = receiver._multiplatform
+
+    def acknowledge_but_ignore(frame, dev, function, params):
+        if function == p.MP_SET_HOST_PLATFORM:
+            return receiver._pad(frame, b"")
+        return real(frame, dev, function, params)
+
+    receiver._multiplatform = acknowledge_but_ignore
+    receiver.devices[fakehid.MX_KEYS_INDEX].platform = 1
+    agent, recorder = _agent_with_recorder(tmp_path)
+    agent.assert_once()
+    agent.notifier._drain()
+
+    kinds = {n.kind for n in recorder.sent}
+    assert notify.FAILED in kinds
+    assert notify.SWITCHED not in kinds, "a write that did not take is not a switch"
+
+
+def test_notifications_can_be_turned_off(receiver, tmp_path):
+    keyboard = receiver.devices[fakehid.MX_KEYS_INDEX]
+    agent, recorder = _agent_with_recorder(tmp_path, notify=False)
+    keyboard.platform = 1
+    agent.assert_once()
+    agent.notifier._drain()
+    assert recorder.sent == []
+
+
+def test_a_broken_notifier_does_not_break_the_agent(receiver, tmp_path):
+    """A notification that can take the agent down is worse than no notification."""
+    from logiswitch import notify
+
+    def explode(_note):
+        raise OSError("the notification subsystem is on fire")
+
+    keyboard = receiver.devices[fakehid.MX_KEYS_INDEX]
+    keyboard.platform = 1
+    agent = Agent(config(tmp_path))
+    agent.notifier = notify.Notifier(sender=explode)
+    assert agent.assert_once(), "the pass must still succeed"
+    assert agent.notifier._drain() == 0
+    assert keyboard.platform == 0, "and the keyboard must still have been corrected"

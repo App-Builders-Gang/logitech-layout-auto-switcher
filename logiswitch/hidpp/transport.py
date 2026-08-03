@@ -13,12 +13,15 @@ so shutdown is bounded; the wait itself is a kernel wait and burns no CPU.
 from __future__ import annotations
 
 import contextlib
+import itertools
 import logging
+import os
 import threading
 import time
 from collections.abc import Iterable, Sequence
 from typing import Callable
 
+from .. import trace
 from . import backend
 from . import protocol as p
 
@@ -35,6 +38,16 @@ DEFAULT_TIMEOUT = 1.2
 SCAN_WINDOW = 1.4
 #: Gap between fan-out pings so the receiver does not reply "busy" to all of them.
 SCAN_STAGGER = 0.02
+#: Seconds between orphan-frame warnings. The first one always logs; the rest are
+#: throttled so a receiver in a bad mood cannot flood the log it is evidence in.
+ORPHAN_WARN_INTERVAL = 30.0
+#: Escape hatch. HID++ 2.0 requires a device to echo the software id and rotating
+#: it is what stops a stale reply being mistaken for a fresh one, but firmware that
+#: got that wrong would answer nothing at all -- so leave a way back.
+FIXED_SWID_ENV = "LOGISWITCH_FIXED_SWID"
+#: How long a request that gave up is remembered, so its answer can still be
+#: recognised as belonging to it when it eventually turns up.
+ABANDONED_MEMORY = 3.0
 
 
 class _ResponseSink:
@@ -72,10 +85,11 @@ class _ResponseSink:
 class _ScanSink:
     """Collects replies to a fan-out ping across several device indices."""
 
-    __slots__ = ("wanted", "frames", "event")
+    __slots__ = ("wanted", "func_byte", "frames", "event")
 
-    def __init__(self, wanted: Iterable[int]):
+    def __init__(self, wanted: Iterable[int], func_byte: int):
         self.wanted = set(wanted)
+        self.func_byte = func_byte
         self.frames: dict[int, bytes] = {}
         self.event = threading.Event()
 
@@ -84,10 +98,12 @@ class _ScanSink:
         if index not in self.wanted:
             return False
         # Either a ping reply or an error for the ping counts as "slot answered".
-        ping_reply = frame[2] == p.FEATURE_ROOT and frame[3] == p.function_byte(
-            p.ROOT_GET_PROTOCOL_VERSION
+        # Both are matched on the software id this scan stamped, so a straggler
+        # from the previous scan cannot be counted as this one's answer.
+        ping_reply = frame[2] == p.FEATURE_ROOT and frame[3] == self.func_byte
+        is_error = frame[2] in (p.ERROR_HIDPP20, p.ERROR_HIDPP10) and (
+            len(frame) >= 5 and frame[4] == self.func_byte
         )
-        is_error = frame[2] in (p.ERROR_HIDPP20, p.ERROR_HIDPP10)
         if not (ping_reply or is_error):
             return False
         self.frames.setdefault(index, frame)
@@ -116,6 +132,20 @@ class Transport:
         self._request_lock = threading.RLock()
         self._dead = False
         self.on_notification: Callable[[bytes], None] | None = None
+        self._sw_ids = itertools.cycle(p.SW_IDS)
+        self._fixed_sw_id = os.environ.get(FIXED_SWID_ENV) == "1"
+        self._last_orphan_warning = 0.0
+        #: Requests that timed out, keyed exactly as their reply would arrive, with
+        #: an expiry. See :meth:`_abandon`.
+        self._abandoned: dict[tuple[int, int, int], float] = {}
+
+    def _next_sw_id(self) -> int:
+        """Stamp the next request. Rotating is what makes a late reply detectable."""
+        if self._fixed_sw_id:
+            return p.SW_ID
+        # itertools.cycle.__next__ is a single bytecode under the GIL, and requests
+        # are serialised by _request_lock anyway, so no extra lock is warranted.
+        return next(self._sw_ids)
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -206,17 +236,96 @@ class Transport:
                 continue
             self._dispatch(data)
 
+    @staticmethod
+    def _reply_key(frame: bytes) -> tuple[int, int, int] | None:
+        """The (device, feature, funcByte) a frame answers, or None if it answers nothing.
+
+        An error frame carries the feature and function one byte further along than a
+        normal reply does, so the two layouts are read separately.
+        """
+        if len(frame) < 4:
+            return None
+        if frame[2] in (p.ERROR_HIDPP20, p.ERROR_HIDPP10):
+            return (frame[1], frame[3], frame[4]) if len(frame) >= 5 else None
+        return (frame[1], frame[2], frame[3])
+
+    def _abandon(self, device_index: int, feature_index: int, func_byte: int) -> None:
+        """Remember a request that gave up waiting.
+
+        Its answer may still be in flight. Because the software id rotates, that
+        answer carries a key no later request will reuse for a long time, so when it
+        finally lands it can be attributed to the request that gave up rather than
+        handed to whoever happens to be waiting. Rotation makes the straggler
+        *distinguishable*; this makes it *rejected*.
+        """
+        now = time.monotonic()
+        self._abandoned = {key: due for key, due in self._abandoned.items() if due > now}
+        self._abandoned[(device_index, feature_index, func_byte)] = now + ABANDONED_MEMORY
+
+    def _is_abandoned(self, frame: bytes) -> bool:
+        key = self._reply_key(frame)
+        if key is None:
+            return False
+        due = self._abandoned.get(key)
+        if due is None:
+            return False
+        if due <= time.monotonic():
+            self._abandoned.pop(key, None)
+            return False
+        self._abandoned.pop(key, None)  # it has arrived; stop watching for it
+        return True
+
     def _dispatch(self, frame: bytes) -> None:
+        summary = p.describe_frame(frame)
+        if self._is_abandoned(frame):
+            # The answer to a request that already gave up. Never offer it to the
+            # sink that happens to be installed now -- that is the whole bug.
+            self._note_orphan(frame, f"late answer to an abandoned request: {summary}")
+            return
         with self._sink_lock:
             sink = self._sink
         if sink is not None and sink.accept(frame):
+            trace.HEALTH.bump("replies")
+            trace.record(trace.IN, self.label, frame, summary)
             return
+
+        if p.is_unsolicited(frame) or p.is_connection_notification(frame):
+            trace.HEALTH.bump("notifications")
+            trace.record(trace.NOTIFY, self.label, frame, summary)
+        else:
+            self._note_orphan(frame, summary)
+
         callback = self.on_notification
         if callback is not None:
             try:
                 callback(frame)
             except Exception:
                 log.exception("notification callback raised")
+
+    def _note_orphan(self, frame: bytes, summary: str) -> None:
+        """A reply nobody was waiting for.
+
+        Almost always a straggler: the request it answers gave up at its deadline
+        and the reply turned up afterwards. Harmless now that the software id is
+        rotated -- it can no longer be handed to whichever request came next -- but
+        worth counting and saying out loud, because it is the fingerprint of a
+        receiver answering slowly enough for that race to have been possible, and
+        it is the thing to look for in the trace next to a wrong-layout report.
+        """
+        total = trace.HEALTH.bump("orphans")
+        trace.record(trace.ORPHAN, self.label, frame, summary)
+        now = time.monotonic()
+        if total == 1 or now - self._last_orphan_warning >= ORPHAN_WARN_INTERVAL:
+            self._last_orphan_warning = now
+            log.warning(
+                "%s: reply arrived with nothing waiting for it (%d so far): %s -- "
+                "the device is answering later than the %.1fs deadline",
+                self.label,
+                total,
+                summary,
+                DEFAULT_TIMEOUT,
+            )
+            trace.anomaly(f"orphan reply on {self.label}: {summary}")
 
     def _fail_pending(self, exc: Exception) -> None:
         with self._sink_lock:
@@ -249,27 +358,34 @@ class Transport:
             raise p.TransportClosed(f"{self.label} is gone")
         if long_report is None:
             long_report = len(params) > 3
-        frame = p.build_frame(
-            device_index, feature_index, function, params, long_report=long_report
-        )
-        sink = _ResponseSink(device_index, feature_index, p.function_byte(function))
         with self._request_lock:
+            sw_id = self._next_sw_id()
+            frame = p.build_frame(
+                device_index, feature_index, function, params, sw_id=sw_id, long_report=long_report
+            )
+            sink = _ResponseSink(device_index, feature_index, p.function_byte(function, sw_id))
             with self._sink_lock:
                 self._sink = sink
             try:
+                trace.HEALTH.bump("requests")
+                trace.record(trace.OUT, self.label, frame, p.describe_frame(frame))
                 self._handle_for(long_report).write(frame)
                 if not sink.event.wait(timeout):
+                    trace.HEALTH.bump("timeouts")
+                    self._abandon(device_index, feature_index, sink.func_byte)
                     raise p.HidppTimeout(
                         f"no response from device {device_index} "
                         f"feature 0x{feature_index:02X} fn {function}"
                     )
             except OSError as exc:
                 self._dead = True
+                trace.HEALTH.bump("transport_losses")
                 raise p.TransportClosed(str(exc)) from exc
             finally:
                 with self._sink_lock:
                     self._sink = None
         if sink.error is not None:
+            trace.HEALTH.bump("errors")
             raise sink.error
         assert sink.frame is not None
         return sink.frame[4:]
@@ -285,21 +401,33 @@ class Transport:
         wanted = list(indices)
         if not self._handles:
             raise p.TransportClosed(f"{self.label} is not open")
-        sink = _ScanSink(wanted)
         ping = bytes([0x00, 0x00, 0xAA])
         with self._request_lock:
+            # One software id for the whole fan-out: every ping in this window is
+            # the same question, and stamping them alike is what lets replies from
+            # a *previous* window be told apart and discarded.
+            sw_id = self._next_sw_id()
+            sink = _ScanSink(wanted, p.function_byte(p.ROOT_GET_PROTOCOL_VERSION, sw_id))
             with self._sink_lock:
                 self._sink = sink
             try:
                 handle = self._handle_for(False)
                 for index in wanted:
                     frame = p.build_frame(
-                        index, p.FEATURE_ROOT, p.ROOT_GET_PROTOCOL_VERSION, ping, long_report=False
+                        index,
+                        p.FEATURE_ROOT,
+                        p.ROOT_GET_PROTOCOL_VERSION,
+                        ping,
+                        sw_id=sw_id,
+                        long_report=False,
                     )
                     try:
+                        trace.HEALTH.bump("requests")
+                        trace.record(trace.OUT, self.label, frame, p.describe_frame(frame))
                         handle.write(frame)
                     except OSError as exc:
                         self._dead = True
+                        trace.HEALTH.bump("transport_losses")
                         raise p.TransportClosed(str(exc)) from exc
                     time.sleep(SCAN_STAGGER)
                 sink.event.wait(window)

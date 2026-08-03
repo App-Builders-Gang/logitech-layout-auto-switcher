@@ -109,6 +109,8 @@ Full guide: **[docs/INSTALL.md](docs/INSTALL.md)**.
 logiswitch status      # what is attached and what it is set to
 logiswitch set mac     # switch everything once, right now
 logiswitch watch       # run the agent in the foreground
+logiswitch doctor      # why is the keyboard typing the wrong characters?
+logiswitch notify-test # check desktop notifications are permitted
 logiswitch probe       # full HID++ dump for bug reports
 logiswitch update      # bring this installation up to the latest release
 logiswitch uninstall   # remove the logon service
@@ -129,6 +131,95 @@ stops the running agent first (Windows locks files a running process holds),
 installs, and restarts it; if the install fails the old build is restarted so the
 machine is never left without an agent. The `update` command itself ships from
 v2.0.4 — to get there the first time, re-run the install one-liner above.
+## Several machines sharing one keyboard
+
+Run the agent on every machine. They take turns automatically: **the machine you are
+typing on owns the keyboard, and the rest stand down.**
+
+No configuration and no negotiation — which matters, because the machines have no way
+to talk to each other. It works because only one machine can be receiving your
+keystrokes at a time, so each agent reaches the same answer on its own by asking its
+OS how long since anyone used it. It scales to any number of machines.
+
+Two topologies, both handled:
+
+- **Shared receiver (KVM)** — every machine sees the same receiver, so the keyboard
+  has one platform slot and they genuinely compete for it. Taking turns is the fix.
+- **A receiver per machine** — each machine owns a different Easy-Switch slot and
+  there is no competition. Add `--claim-host N` if you want to pin it explicitly.
+
+Escapes when the automatic behaviour is not what you want:
+
+```bash
+logiswitch watch --observe            # never change the layout, just report
+logiswitch install --observe          # ...and make that permanent
+logiswitch watch --active-window 60   # wait longer before yielding
+logiswitch watch --claim-host 1       # only ever set Easy-Switch host 1
+```
+
+If the layout still flips back and forth, one machine is probably running an old
+build — those do not take turns. The log names it outright:
+
+```
+another machine is running an OLD logiswitch (software id 0x0E) and setting this
+keyboard's platform. Old builds do not take turns -- update logiswitch on that machine
+```
+
+## Notifications
+
+The agent tells you on the desktop when the layout changes — on macOS and Windows —
+and when something is wrong: a switch that would not stick, a layout that keeps
+reverting, an unstable wireless link, or a host input source that is not Latin.
+
+They are **throttled**, which matters more than it sounds. A keyboard whose platform
+keeps reverting can be corrected every few seconds; reporting each one would mean
+hundreds of notifications an hour. Instead each kind of message has a cooldown, and a
+fault that keeps recurring is reported once as a standing condition — *"the layout
+keeps reverting … run logiswitch doctor"* — with the count of what was hidden.
+
+On by default. Turn them off with `logiswitch watch --no-notify`, or for the
+installed agent:
+
+```bash
+logiswitch install --no-notify
+```
+
+If nothing appears, the notification is being blocked rather than not sent — run
+`logiswitch notify-test` and check **System Settings → Notifications → Script
+Editor** on macOS (that is who macOS attributes an `osascript` notification to), or
+**Settings → System → Notifications** on Windows.
+
+## When the keyboard types the wrong characters
+
+Three different faults look identical from the keyboard, and only the first is
+one this tool can fix. Run **`logiswitch doctor`** — it checks all three and names
+which one you have:
+
+| What you see | What it actually is |
+| --- | --- |
+| `⌘`/`Alt` swapped, `@` types `"` | The keyboard's firmware is in the wrong platform mode. This is what logiswitch corrects. |
+| A different alphabet entirely | Your *host* input source, e.g. Arabic instead of Latin. logiswitch does not manage this — switch it with `⌃Space` (macOS) or `Alt+Shift` / `Win+Space` (Windows). |
+| Dropped, repeated or garbled keys | The wireless link, not the layout. Interference, a low battery or a failing receiver. |
+
+`doctor` writes its report next to the log so it can be attached to a bug report.
+For a fault that only shows up occasionally, leave the agent running with tracing
+on and re-run `doctor` the moment it happens:
+
+```bash
+logiswitch watch -v --trace
+```
+
+That records every HID++ frame in a ring buffer and dumps the recent ones to
+`logiswitch.trace.log` whenever something anomalous occurs — a reply arriving
+after its deadline, a platform write that did not take, or a link that keeps
+dropping.
+
+On macOS, opening the receiver needs **Input Monitoring** (System Settings →
+Privacy & Security). Without it the device still enumerates but will not open, which
+looks like a hardware fault and is not one; `doctor` detects that case and says so.
+
+Protocol references, and the two hard-won workarounds this project inherited from
+Solaar, are in **[docs/RESOURCES.md](docs/RESOURCES.md)**.
 
 ## Why Logi Options+ doesn't fix this
 

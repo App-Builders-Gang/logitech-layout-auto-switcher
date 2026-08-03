@@ -164,3 +164,32 @@ def test_wait_until_unloaded_gives_up_without_raising(monkeypatch, launchctl):
     monkeypatch.setattr(service.time, "monotonic", clock)
 
     assert service._wait_until_unloaded("gui/501/x") is False
+
+
+def _installed_plist(tmp_path) -> dict:
+    written = next((tmp_path / "Library" / "LaunchAgents").glob("*.plist"))
+    return plistlib.loads(written.read_bytes())
+
+
+def test_no_notify_is_baked_into_the_plist(launchctl, tmp_path):
+    """Windows has no environment channel, so argv is the only portable way."""
+    service.install("macos", notify=False)
+    assert "--no-notify" in _installed_plist(tmp_path)["ProgramArguments"]
+
+
+def test_notifications_add_no_argument_when_left_on(launchctl, tmp_path):
+    service.install("macos")
+    arguments = _installed_plist(tmp_path)["ProgramArguments"]
+    assert "--no-notify" not in arguments
+    assert arguments[-2:] == ["--os", "macos"]
+
+
+def test_observe_mode_is_baked_into_the_plist(launchctl, tmp_path):
+    """A secondary machine must stay observe-only across a reboot."""
+    service.install("macos", observe=True)
+    assert "--observe" in _installed_plist(tmp_path)["ProgramArguments"]
+
+
+def test_a_normal_install_does_not_observe(launchctl, tmp_path):
+    service.install("macos")
+    assert "--observe" not in _installed_plist(tmp_path)["ProgramArguments"]

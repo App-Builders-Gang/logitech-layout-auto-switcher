@@ -120,19 +120,28 @@ def _current_user() -> str:
     return getpass.getuser()
 
 
-def _agent_command(target_os: str | None) -> tuple[str, str]:
+def _agent_command(
+    target_os: str | None, notify: bool = True, observe: bool = False
+) -> tuple[str, str]:
     executable = python_executable(windowless=True)
     arguments = f"-m {APP_NAME} watch"
     if target_os:
         arguments += f" --os {target_os}"
+    if observe:
+        arguments += " --observe"
+    if not notify:
+        # Baked into argv rather than passed as an environment variable: the Task
+        # XML has no <Environment> element, so argv is the only channel that works
+        # on both platforms.
+        arguments += " --no-notify"
     return str(executable), arguments
 
 
 # -- Windows ------------------------------------------------------------------
 
 
-def _windows_install(target_os: str | None) -> str:
-    command, arguments = _agent_command(target_os)
+def _windows_install(target_os: str | None, notify: bool = True, observe: bool = False) -> str:
+    command, arguments = _agent_command(target_os, notify, observe)
     xml = _TASK_XML.format(
         task_name=TASK_NAME,
         user=_current_user(),
@@ -238,11 +247,15 @@ def _bootstrap(domain: str, target: str, path: Path) -> None:
     )
 
 
-def _macos_install(target_os: str | None) -> str:
+def _macos_install(target_os: str | None, notify: bool = True, observe: bool = False) -> str:
     executable = str(python_executable())
     arguments = [executable, "-m", APP_NAME, "watch"]
     if target_os:
         arguments += ["--os", target_os]
+    if observe:
+        arguments.append("--observe")
+    if not notify:
+        arguments.append("--no-notify")
     # launchd's own stdio capture goes to a separate file: the agent writes its log
     # itself, and pointing both at one path doubles every line. This one only ever
     # holds crashes that happen before logging is configured.
@@ -312,12 +325,12 @@ def _macos_status() -> dict:
 # -- public -------------------------------------------------------------------
 
 
-def install(target_os: str | None = None) -> str:
+def install(target_os: str | None = None, notify: bool = True, observe: bool = False) -> str:
     """Register the background service. Does not touch PATH (see ensure_on_path)."""
     if is_windows():
-        return _windows_install(target_os)
+        return _windows_install(target_os, notify, observe)
     if is_macos():
-        return _macos_install(target_os)
+        return _macos_install(target_os, notify, observe)
     raise ServiceError(
         "automatic service installation is only implemented for Windows and macOS; "
         f"run '{APP_NAME} watch' from your own supervisor instead"

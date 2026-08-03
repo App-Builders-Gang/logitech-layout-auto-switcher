@@ -10,6 +10,7 @@ tomorrow works without a code change.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from . import backend
@@ -107,23 +108,33 @@ def open_transport(group: InterfaceGroup) -> Transport:
 
 
 def discover_devices(
-    transport: Transport, hint: int | None = None, indices: tuple[int, ...] = SCAN_INDICES
+    transport: Transport,
+    hint: int | Sequence[int] | None = None,
+    indices: tuple[int, ...] = SCAN_INDICES,
 ) -> list[HidppDevice]:
     """Return every HID++ 2.0 device reachable through `transport`.
 
-    `hint` is a previously-seen device index. Trying it first turns the common
-    reconnect into a single sub-second ping instead of a full scan; a miss just
-    falls through to the fan-out.
+    `hint` is the device indices seen last time -- one, or several. Pinging them
+    first turns the common reconnect into a couple of sub-second pings instead of a
+    full scan; if none answer it falls through to the fan-out.
+
+    Every hinted index is tried, not just the first that answers. Returning early
+    with a single device silently dropped every other device on the receiver, so a
+    reconnect left a second keyboard unmanaged until something forced a full scan --
+    invisible with one device, and wrong with two.
     """
-    if hint is not None:
-        device = HidppDevice(transport, hint)
+    wanted = [hint] if isinstance(hint, int) else list(hint or ())
+    found = []
+    for index in wanted:
+        device = HidppDevice(transport, index)
         try:
             device.ping(timeout=0.8)
         except (p.HidppTimeout, p.HidppError, p.TransportClosed):
-            pass
-        else:
-            log.debug("hint hit: device index %d answered directly", hint)
-            return [device]
+            continue
+        found.append(device)
+    if found:
+        log.debug("hint hit: device indices %s answered directly", [d.index for d in found])
+        return found
 
     answers = transport.scan(indices)
     devices = [

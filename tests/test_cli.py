@@ -170,9 +170,11 @@ def test_watch_rejects_an_unknown_target_os(receiver, capsys):
 
 
 def test_install_reports_what_it_registered(monkeypatch, capsys):
-    monkeypatch.setattr(service, "install", lambda target=None: f"thing for {target}")
     monkeypatch.setattr(service, "ensure_on_path", lambda: True)
     monkeypatch.setattr(service, "path_hint", lambda: "open a new terminal")
+    monkeypatch.setattr(
+        service, "install", lambda target=None, notify=True, observe=False: f"thing for {target}"
+    )
     monkeypatch.setattr(service, "status", lambda: {"installed": True, "state": "Running"})
 
     code, out, _err = run(capsys, "install", "--os", "mac")
@@ -185,7 +187,9 @@ def test_install_reports_what_it_registered(monkeypatch, capsys):
 
 
 def test_install_does_not_mention_path_when_already_there(monkeypatch, capsys):
-    monkeypatch.setattr(service, "install", lambda target=None: "scheduled task")
+    monkeypatch.setattr(
+        service, "install", lambda target=None, notify=True, observe=False: "scheduled task"
+    )
     monkeypatch.setattr(service, "ensure_on_path", lambda: False)
     monkeypatch.setattr(service, "status", lambda: {"installed": True, "state": "Running"})
 
@@ -196,7 +200,7 @@ def test_install_does_not_mention_path_when_already_there(monkeypatch, capsys):
 
 
 def test_install_surfaces_a_failure(monkeypatch, capsys):
-    def boom(target=None):
+    def boom(target=None, notify=True, observe=False):
         raise service.ServiceError("launchctl said no")
 
     monkeypatch.setattr(service, "install", boom)
@@ -272,3 +276,108 @@ def test_unexpected_errors_are_reported_not_raised(monkeypatch, receiver, capsys
 
     assert code == 1
     assert "something deep broke" in err
+
+
+# -- tracing ------------------------------------------------------------------
+
+
+def test_trace_turns_on_frame_logging_and_a_dump_destination(monkeypatch, receiver, tmp_path):
+    from logiswitch import trace
+
+    monkeypatch.setattr(cli, "trace_path", lambda: tmp_path / "t.log")
+    cli.main(["--trace", "status"])
+    assert trace.echoing()
+    assert trace.anomaly("something looked wrong") == tmp_path / "t.log"
+
+
+def test_a_plain_command_leaves_no_files_behind(monkeypatch, receiver, tmp_path):
+    """`status` has no business writing into the log directory."""
+    from logiswitch import trace
+
+    monkeypatch.setattr(cli, "trace_path", lambda: tmp_path / "t.log")
+    cli.main(["status"])
+    assert not trace.echoing()
+    assert trace.anomaly("nowhere to go") is None
+    assert not (tmp_path / "t.log").exists()
+
+
+def test_watch_records_a_trace_destination_without_being_asked(monkeypatch, receiver, tmp_path):
+    from logiswitch import trace
+
+    monkeypatch.setattr(cli, "trace_path", lambda: tmp_path / "t.log")
+    monkeypatch.setattr(cli, "state_path", lambda: tmp_path / "state.json")
+    cli.main(["watch", "--once", "--os", "mac"])
+    assert trace.anomaly("the agent found something") == tmp_path / "t.log"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["-v", "status"],
+        ["status", "-v"],
+        ["--verbose", "status"],
+    ],
+)
+def test_global_flags_work_on_either_side_of_the_subcommand(argv):
+    """argparse copies a subparser's defaults over what the top level already parsed.
+
+    Without suppressed defaults `logiswitch -v status` silently ran without debug
+    logging, which is a poor way to find out about an intermittent fault.
+    """
+    args = cli.build_parser().parse_args(argv)
+    resolved = {
+        name: getattr(args, name, fallback) for name, fallback in cli.GLOBAL_FLAG_DEFAULTS.items()
+    }
+    assert resolved["verbose"] is True
+
+
+def test_flags_that_are_not_given_fall_back(monkeypatch, receiver):
+    cli.main(["status"])
+    args = cli.build_parser().parse_args(["status"])
+    assert getattr(args, "trace", cli.GLOBAL_FLAG_DEFAULTS["trace"]) is False
+
+
+# -- notifications -------------------------------------------------------------
+
+
+def test_install_passes_the_notification_choice_through(monkeypatch, capsys):
+    seen = {}
+
+    def fake_install(target=None, notify=True, observe=False):
+        seen["notify"] = notify
+        return "a service"
+
+    monkeypatch.setattr(service, "install", fake_install)
+    monkeypatch.setattr(service, "status", lambda: {"installed": False})
+
+    run(capsys, "install", "--no-notify")
+    assert seen["notify"] is False
+    run(capsys, "install")
+    assert seen["notify"] is True, "notifications are on unless asked otherwise"
+
+
+def test_watch_defaults_to_notifying():
+    args = cli.build_parser().parse_args(["watch"])
+    assert args.notify is True
+    assert cli.build_parser().parse_args(["watch", "--no-notify"]).notify is False
+
+
+def test_notify_test_reports_the_backend(monkeypatch, capsys):
+    from logiswitch import notify as notify_module
+
+    monkeypatch.setattr(notify_module.Notifier, "deliver", lambda _self, _note: True)
+    code, out, _err = run(capsys, "notify-test")
+    assert code == 0
+    assert "backend:" in out
+    # The whole point of the command is telling someone what to do when nothing
+    # appeared, so the permission path has to be in the output.
+    assert "Notifications" in out
+
+
+def test_notify_test_fails_loudly_when_the_backend_errors(monkeypatch, capsys):
+    from logiswitch import notify as notify_module
+
+    monkeypatch.setattr(notify_module.Notifier, "deliver", lambda _self, _note: False)
+    code, _out, err = run(capsys, "notify-test")
+    assert code == 1
+    assert "failed" in err
