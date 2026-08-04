@@ -219,7 +219,16 @@ def test_every_bracketed_type_literal_is_closed_on_its_own_line():
 
 @pytest.mark.skipif(not notify.is_windows(), reason="needs a real PowerShell")
 def test_powershell_can_actually_parse_the_script():
-    """The check that would have caught it: ask PowerShell, do not guess."""
+    """The check that would have caught it: ask PowerShell, do not guess.
+
+    Both out-parameters are declared before being passed. ``[ref]`` binds a *variable
+    path*, so handing it a name that does not exist yet fails with
+    ``NonExistingVariableReference`` -- and that failure looks exactly like the script
+    being rejected. The first version of this test did that, so it failed on every
+    Windows run for a reason that had nothing to do with the script it was checking:
+    a test written to stop guessing about PowerShell, which guessed about PowerShell.
+    """
+    import os
     import subprocess
 
     completed = subprocess.run(
@@ -229,13 +238,19 @@ def test_powershell_can_actually_parse_the_script():
             "-NonInteractive",
             "-Command",
             "$ErrorActionPreference='Stop';"
+            "$tokens=$null; $errors=$null;"
             "[void][System.Management.Automation.Language.Parser]::ParseInput("
-            "$env:LOGISWITCH_SCRIPT, [ref]$null, [ref]$errors);"
+            "$env:LOGISWITCH_SCRIPT, [ref]$tokens, [ref]$errors);"
             "if ($errors) { $errors | ForEach-Object { $_.Message }; exit 1 }",
         ],
         capture_output=True,
         text=True,
         timeout=60,
-        env={**__import__("os").environ, "LOGISWITCH_SCRIPT": notify._POWERSHELL_SCRIPT},
+        env={**os.environ, "LOGISWITCH_SCRIPT": notify._POWERSHELL_SCRIPT},
     )
-    assert completed.returncode == 0, f"PowerShell rejected the script: {completed.stdout}"
+    # Parse errors are printed to stdout by the loop above, but anything that stops
+    # the harness itself lands on stderr -- and reporting only stdout is why the
+    # original failure arrived as a blank message.
+    assert completed.returncode == 0, (
+        f"PowerShell rejected the script.\nstdout: {completed.stdout}\nstderr: {completed.stderr}"
+    )
