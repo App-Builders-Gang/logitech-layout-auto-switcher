@@ -57,24 +57,24 @@ the key combination.
 Options+ *does* drive this feature. So why is the layout still wrong after every
 switch, even with Options+ installed on both machines?
 
-Because of **when** it acts. Reverse-engineered on macOS 2.6.941708 — decompiled,
-then instrumented while running:
+Because of **when** it acts. Measured on macOS, Options+ 2.6.941708:
 
-> **Logi Options+ writes the layout once, when its agent registers the device —
-> about seven seconds after start — and never again.**
+> **Logi Options+ corrects the layout once, shortly after its agent starts — about
+> seven seconds — and never again.**
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/optionsplus-dark.svg">
   <img alt="Two eighteen-second timelines over the same four KVM switches. With only Logi Options+ installed, one setHostPlatform write happens when its agent starts; from the first KVM switch onwards the strip stays red for the rest of the run, because Options+ only acts at start-up and a KVM switch starts nothing. With logiswitch running, each switch turns the strip red for 1.1 seconds and then green again." src="assets/optionsplus-light.svg" width="900">
 </picture>
 
-Three measurements, all reproducible:
+Three measurements, all reproducible, and all with **"Always keep the keyboard in Mac
+layout" switched on**:
 
 | What was done | What Options+ did |
 |---|---|
-| Forced the platform wrong under a **running** Options+, 35 s | nothing |
+| Set the keyboard to the wrong platform under a **running** Options+, 35 s | nothing |
 | Same, with its **window open**, 45 s | nothing |
-| Forced it wrong, then **restarted its agent** | corrected in ~7 s, every time |
+| Set it wrong, then **restarted its agent** | corrected in ~7 s, every time |
 
 **A KVM switch restarts nothing.** It moves the receiver to the other machine and
 that machine's Options+ has been running for hours — so nothing re-asserts, and the
@@ -82,10 +82,9 @@ keyboard keeps whatever layout the last computer left it in. That gap is the who
 reason this project exists: it fires on device *arrival*, the event Options+ ignores,
 and writes the same value Options+ would want, so the two agree rather than fight.
 
-Two details worth knowing, because they are not what the UI implies: the setting
-**"Always keep the keyboard in Mac layout"** does not drive any of this, and Options+
-addresses a **concrete Easy-Switch host index rather than `0xFF`** — the same
-conclusion this project reached the hard way. Captured frames, symbols and method:
+Worth saying plainly, because it is not what the setting's name implies: leaving
+**"Always keep the keyboard in Mac layout"** switched on did not keep the keyboard in
+Mac layout across a switch. The full measurements are in
 **[docs/PROTOCOL.md](docs/PROTOCOL.md)**.
 
 ## How it compares

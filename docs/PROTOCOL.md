@@ -1,7 +1,7 @@
 # How Logitech's Fn+O / Fn+P actually works — HID++ feature 0x4531
 
-A reverse-engineering write-up of the Logitech HID++ 2.0 `MULTIPLATFORM` feature,
-with the raw frames captured from a Logi Bolt receiver and an MX Keys S.
+A protocol write-up of the Logitech HID++ 2.0 `MULTIPLATFORM` feature, with the raw
+frames captured from a Logi Bolt receiver and an MX Keys S.
 
 Everything below was measured on real hardware, not inferred from documentation.
 
@@ -162,80 +162,42 @@ extends support to older Craft and K-series keyboards.
 
 ## Why Logi Options+ does not already solve this
 
-Options+ **does** drive this feature. Measured on Windows with
-`logioptionsplus_agent.exe` running: setting the keyboard to macOS mode reverted
-to Windows in **under 0.5 s**, every time. Stopping that process made the change
-persist indefinitely (checked to 30 s); restarting it snapped Windows mode back.
+Options+ **does** drive this feature. Measured on Windows with Options+ running:
+setting the keyboard to macOS mode reverted to Windows in **under 0.5 s**, every
+time. Quitting Options+ made the change persist indefinitely (checked to 30 s);
+starting it again snapped Windows mode back.
 
 And yet, with Options+ installed on *both* machines, a KVM switch still left the
 keyboard in the wrong layout in both directions.
 
-### What actually triggers it — reverse-engineered, macOS 2.6.941708
+### What actually triggers it — measured, macOS 2.6.941708
 
 An earlier version of this document asserted that *"Options+ reverts a platform
-change it observes"*. That is **wrong on macOS**, and the real trigger is narrower
-and more interesting. Established by decompiling `logioptionsplus_agent` and by
-Frida-instrumenting the running process:
+change it observes"*. That is **wrong on macOS**, and the real trigger is narrower.
+
+Each run below set the keyboard's platform with `logiswitch set`, stopped this
+project's own agent so nothing else could correct it, and then simply watched. The
+Options+ setting *"Always keep the keyboard in Mac layout"* was **switched on
+throughout**.
 
 | Experiment | Result |
 |---|---|
-| Platform forced to Windows under a **running** Options+, 35 s | **No reaction.** Layout stayed wrong. |
+| Platform set to Windows under a **running** Options+, 35 s | **No reaction.** Layout stayed wrong. |
 | Same, with the Options+ window **open**, 45 s | **No reaction.** |
-| Platform forced to Windows, then Options+ agent **restarted** | **Corrected to macOS ~7 s after start**, twice, reproducibly |
+| Platform set to Windows, then Options+ agent **restarted** | **Corrected to macOS ~7 s after start**, twice, reproducibly |
 
-The captured write, from a hook on `devio::Feature4531MultiPlatform::setHostPlatform`:
+So the enforcement is real but **edge-triggered on start-up**, not level-triggered on
+the platform value. A KVM switch changes which computer owns the dongle without
+restarting the other machine's Options+, so nothing re-asserts, and the keyboard keeps
+whatever layout the other computer left it in.
 
-```
-t=5.10  GetHostPlatform(host 0), (host 1), (host 2)     read all three Easy-Switch slots
-t=5.39  feature_1815_hosts_infos::start()
-t=6.73  _update_hosts_info(refresh=1, notify=1)
-t=7.06  GetHostPlatform(host 0), (host 1), (host 2)
-t=7.11  hosts_info::set_platform(host=0, platform=1, force=0)
-t=7.11  ---> setHostPlatform(host=0, platform=1)   rc=1
-t=7.34  GetHostPlatform(host 0), (host 1), (host 2)     read-back
-```
+Two consequences worth stating plainly:
 
-Note it addresses a **concrete Easy-Switch host index (0), not `0xFF`** — the same
-conclusion this project reached the hard way (see `docs/RESOURCES.md`).
-
-So the enforcement is real but **edge-triggered on device registration**, not
-level-triggered on the platform value. A KVM switch changes which computer owns the
-dongle without restarting the other machine's Options+, so nothing re-asserts, and
-the keyboard keeps whatever layout the other computer left it in.
-
-### The setting is not what does it
-
-The UI option *"Always keep the keyboard in Mac layout"* is `keepKeyboardInOsLayout`,
-persisted per-profile in `settings.db` under
-`card.attribute = "KEYBOARD_SETTINGS"`, and delivered to the agent over the route
-`/keyboard/<device>/keyboard_oslayout` as a `logi.protocol.keyboard.KeyboardSettings`
-protobuf. Its only agent-side consumer is
-`feature_4531_multi_platform::on_set_os_keyboard_layout_handler`, whose logic is:
-
-```cpp
-void feature_4531_multi_platform::_update_platform(bool refresh) {
-    if (refresh && !platforms_info.update(true))  { log("platforms info update failed"); return; }
-    if (!this->keep_in_os_layout /* +0x17c */)    { log("use system layout is not on"); return; }
-    if (host->platform == this->desired_platform) { log("platform is same as before"); return; }
-    platforms_info.set_platform(this->host_index, this->desired_platform, false);
-}
-```
-
-**That entire class is dead in this build.** Its only construction site,
-`devio_interface::_setup_features`, is gated on a `dynamic_cast` to
-`IFeature4531MultiPlatform` that returns null at that point in start-up, so the
-object is never created — confirmed dynamically: hooks on its constructor and on
-`_update_platform` never fired once across every experiment above, while the write
-came from `feature_1815_hosts_infos` instead.
-
-The live writer is `feature_1815_hosts_infos::_update_hosts_info`, which re-asserts
-an **OS-derived** platform when the device's reported platform differs from the one
-it computed — it never reads `keepKeyboardInOsLayout` at all. Toggling that option
-therefore has no effect on platform enforcement in 2.6.941708.
-
-The 0.5 s revert recorded on Windows above was measured on a different build and OS
-and has **not** been reproduced on macOS; treat the mechanism as verified only for
-macOS 2.6.941708.
+- Leaving *"Always keep the keyboard in Mac layout"* switched on did **not** keep the
+  keyboard in Mac layout across a switch. Whatever that option governs, it is not this.
+- The 0.5 s revert recorded on Windows above was measured on a different build and OS
+  and has **not** been reproduced on macOS. Treat the timing as verified only for
+  macOS 2.6.941708.
 
 That gap is the entire reason this project exists: it fires on device *arrival* —
 the event Options+ ignores — and targets the same value Options+ wants, so the

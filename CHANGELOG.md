@@ -69,15 +69,13 @@ not compete for the setting. Three things were wrong on our side.
 
 ### Documented
 
-- **Why Options+ cannot keep the layout right on a KVM**, established by decompiling
-  its agent and instrumenting the running process. Its enforcement is edge-triggered
-  on device registration — one `setHostPlatform` about seven seconds after its agent
-  starts — and never fires again: forcing the platform wrong underneath a running
-  Options+ produced no reaction for 45 s, window open or closed, while restarting its
-  agent corrected it every time. A KVM switch restarts nothing. Also: it addresses a
-  concrete Easy-Switch host index rather than `0xFF`, the same conclusion this project
-  reached the hard way, and the setting *"Always keep the keyboard in Mac layout"*
-  does not drive any of it. Full method and captured frames in `docs/PROTOCOL.md`.
+- **Why Options+ cannot keep the layout right on a KVM**, measured on macOS
+  2.6.941708. Its enforcement is edge-triggered on start-up — it corrects the platform
+  about seven seconds after its agent starts and never again: setting the platform
+  wrong underneath a running Options+ produced no reaction for 45 s, window open or
+  closed, while restarting its agent corrected it every time. A KVM switch restarts
+  nothing. Every run had *"Always keep the keyboard in Mac layout"* switched on, and
+  it made no difference. Full measurements in `docs/PROTOCOL.md`.
 - The README leads with that argument instead of burying it below the install
   instructions, and stopped making it twice. `How it works` moved to
   `CONTRIBUTING.md`, where a module tree is actually useful.
@@ -444,7 +442,7 @@ Full rewrite around OS device notifications.
 - **59 tests** against a HID++ receiver simulator replaying bytes captured from
   real hardware, plus a live `CM_Register_Notification` round-trip on Windows.
 - CI on Windows and macOS runners; tagged releases build sdist + wheel.
-- [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — the reverse-engineering write-up.
+- [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — the protocol write-up.
 
 ### Fixed
 
