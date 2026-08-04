@@ -14,16 +14,16 @@ every twelve seconds, which is 300 notifications an hour. So each kind of messag
 has a cooldown, and a fault that keeps recurring is reported once, as a standing
 condition, rather than once per occurrence.
 
-No new dependencies: the text goes to the OS through a channel that cannot be quoted
-wrong -- argv on macOS, the environment on Windows -- so there is no escaping to get
-subtly wrong, and nothing here can break the agent if it fails.
+No new dependencies: the text reaches the OS through a channel that cannot be quoted
+wrong -- ``osascript`` argv on macOS, the WinRT toast API called in-process on Windows
+-- so there is no command line to escape, and nothing here can break the agent if it
+fails.
 """
 
 from __future__ import annotations
 
 import contextlib
 import logging
-import os
 import queue
 import subprocess
 import threading
@@ -61,36 +61,9 @@ PEER = "peer"
 #: Kinds that describe an ongoing situation rather than a single event.
 STANDING = frozenset({FLAPPING, LINK, INPUT_SOURCE, PEER})
 
-#: Windows will not display a toast that has no Application User Model ID, and it
-#: fails silently when it does -- the most common way this feature ships broken.
-#: PowerShell's own registered id is the one identity we can rely on existing.
-POWERSHELL_AUMID = r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe"
-
-TOAST_TITLE_ENV = "LOGISWITCH_TOAST_TITLE"
-TOAST_BODY_ENV = "LOGISWITCH_TOAST_BODY"
-
-#: Constant script: the text arrives in the environment, so there is no quoting and
-#: nothing a device name could inject.
-#:
-#: Assembled by concatenation rather than as a triple-quoted block, so the Python
-#: source can stay narrow while every emitted statement remains on **one physical
-#: line**. PowerShell will not continue a type literal across lines -- a backtick
-#: inside ``[Windows.UI.Notifications...]`` is a parse error, "Missing ] at end of
-#: attribute or type literal" -- and wrapping it for readability is exactly how this
-#: shipped broken: the command failed on every Windows machine while the unit tests,
-#: which only ever checked the text was present, passed.
-_POWERSHELL_SCRIPT = (
-    "[Windows.UI.Notifications.ToastNotificationManager,"
-    " Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null\n"
-    "$xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent("
-    "[Windows.UI.Notifications.ToastTemplateType]::ToastText02)\n"
-    "$text = $xml.GetElementsByTagName('text')\n"
-    f"$text.Item(0).AppendChild($xml.CreateTextNode($env:{TOAST_TITLE_ENV})) | Out-Null\n"
-    f"$text.Item(1).AppendChild($xml.CreateTextNode($env:{TOAST_BODY_ENV})) | Out-Null\n"
-    "$toast = [Windows.UI.Notifications.ToastNotification]::new($xml)\n"
-    "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("
-    f"'{POWERSHELL_AUMID}').Show($toast)\n"
-)
+#: Windows toasts are raised in-process through the WinRT COM API (see
+#: ``_wintoast``): no ``powershell`` is spawned, and the title and body go into XML
+#: built on the Python side, so there is no command line for them to escape into.
 
 #: Constant AppleScript reading its text from ``argv``. Passing the message as an
 #: argument rather than interpolating it into the script is what makes a device
@@ -126,20 +99,6 @@ def macos_command(note: Notification) -> list[str]:
     return [*command, "--", note.body, note.title]
 
 
-def windows_command() -> list[str]:
-    return [
-        "powershell",
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-WindowStyle",
-        "Hidden",
-        "-Command",
-        _POWERSHELL_SCRIPT,
-    ]
-
-
 def _send_macos(note: Notification) -> None:
     subprocess.run(
         macos_command(note),
@@ -150,16 +109,11 @@ def _send_macos(note: Notification) -> None:
 
 
 def _send_windows(note: Notification) -> None:
-    environment = dict(os.environ)
-    environment[TOAST_TITLE_ENV] = note.title
-    environment[TOAST_BODY_ENV] = note.body
-    subprocess.run(
-        windows_command(),
-        capture_output=True,
-        timeout=SEND_TIMEOUT,
-        check=True,
-        env=environment,
-    )
+    # Imported lazily so non-Windows platforms never touch ``ctypes``'s WinDLL and
+    # the COM plumbing stays in one module.
+    from ._wintoast import show_toast
+
+    show_toast(note.title, note.body)
 
 
 def default_sender() -> Sender | None:
@@ -176,7 +130,7 @@ def backend_name() -> str:
     if is_macos():
         return "macOS osascript"
     if is_windows():
-        return "Windows toast (PowerShell)"
+        return "Windows toast (native)"
     return "unsupported on this platform"
 
 
