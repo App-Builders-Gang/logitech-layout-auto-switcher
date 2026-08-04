@@ -230,3 +230,35 @@ Include:
 * the last ~50 log lines with `-v` enabled
 * OS version, keyboard model, and how it is connected (receiver / Bluetooth / cable)
 * whether Logi Options+ is installed and running
+
+---
+
+## Sending a diagnosis (especially with two machines)
+
+One command packs everything:
+
+```bash
+logiswitch bundle
+```
+
+It writes `logiswitch-diagnostics-<hostname>-<timestamp>.zip` to your home directory
+containing the agent log and its rotations, the frame trace, the device dump, the
+installed service definition, and the environment. Run it on **both** machines when
+they are sharing a keyboard — the hostname is in the filename precisely so the two
+can be told apart.
+
+It contains no keystrokes (this project never sees any) and no credentials. It does
+contain the machine's hostname and its Logitech device names.
+
+For a full device dump, stop the agent first — only one process can hold the
+receiver, and normally that is the agent:
+
+```bash
+launchctl bootout gui/$(id -u)/com.appbuildersgang.logiswitch   # macOS
+schtasks /End /TN LogiSwitch                                    # Windows
+logiswitch bundle
+logiswitch install    # start it again
+```
+
+`bundle` says so itself when the agent has the device, rather than blaming the
+macOS Input Monitoring permission for it.

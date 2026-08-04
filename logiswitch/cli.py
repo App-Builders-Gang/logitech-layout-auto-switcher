@@ -9,6 +9,7 @@ logiswitch update              bring this installation up to the latest release
 logiswitch update --check      report whether an update is available
 logiswitch probe               full HID++ dump, for bug reports
 logiswitch doctor              why is the keyboard typing the wrong characters?
+logiswitch bundle              pack the logs and device dump into one file
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ import sys
 from collections.abc import Iterator
 from pathlib import Path
 
-from . import __version__, activity, diagnostics, hidpp, notify, service, trace
+from . import __version__, activity, bundle, diagnostics, hidpp, notify, service, trace
 from . import agent as agent_module
 from .agent import Agent, AgentConfig
 from .hidpp import protocol as p
@@ -226,14 +227,14 @@ def _tail(path: Path, lines: int) -> list[str]:
     return content[-lines:]
 
 
-def cmd_doctor(args: argparse.Namespace) -> int:
-    """Everything bearing on "why did the keyboard type the wrong character".
+def doctor_report(target_os: str | None = None) -> tuple[str, list[str]]:
+    """Build the diagnosis. Returns the report text and what it found wrong.
 
-    Deliberately one command with one output: the three causes look identical to
-    the person at the keyboard, so a report that covers only the firmware platform
-    would keep sending people to fix the wrong thing.
+    Separated from :func:`cmd_doctor` so ``bundle`` can put the same report in its
+    archive. Two implementations of "what is wrong with this keyboard" would drift,
+    and a bundle that disagreed with the command would be worse than no bundle.
     """
-    target = p.normalise_os(args.os or default_target_os())
+    target = p.normalise_os(target_os or default_target_os())
     out: list[str] = []
     findings: list[str] = []
 
@@ -305,7 +306,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             # Enumerated but unopenable is a permission problem, not a missing
             # receiver, and saying the latter sends people looking for a hardware
             # fault that does not exist.
-            findings.append(diagnostics.cannot_open_hint() or "an endpoint would not open")
+            # Our own agent holding the device is the ordinary case, not a fault.
+            agent_running = (
+                bool(state.get("installed")) and "run" in str(state.get("state", "")).lower()
+            )
+            findings.append(
+                diagnostics.cannot_open_hint(agent_running) or "an endpoint would not open"
+            )
         if not opened and not refused:
             out.append("  no Logitech HID++ endpoint found")
             findings.append(
@@ -369,7 +376,17 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         out.append("  missed it. Leave `logiswitch watch -v --trace` running, and re-run")
         out.append("  this command the moment the wrong characters appear.")
 
-    report = "\n".join(out)
+    return "\n".join(out), findings
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Everything bearing on "why did the keyboard type the wrong character".
+
+    Deliberately one command with one output: the three causes look identical to
+    the person at the keyboard, so a report that covers only the firmware platform
+    would keep sending people to fix the wrong thing.
+    """
+    report, findings = doctor_report(args.os)
     print(report)
     destination = doctor_report_path()
     try:
@@ -379,6 +396,20 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     except OSError as exc:
         print(f"\ncould not write {destination}: {exc}", file=sys.stderr)
     return 1 if findings else 0
+
+
+def cmd_bundle(args: argparse.Namespace) -> int:
+    """Pack everything a diagnosis needs into one file."""
+    try:
+        archive = bundle.build(args.output, target_os=args.os)
+    except OSError as exc:
+        print(f"could not write the bundle: {exc}", file=sys.stderr)
+        return 1
+    size = archive.stat().st_size
+    print(f"\nwrote {archive}  ({size / 1024:.0f} KiB)")
+    print("Send this one file. It contains the logs, the frame trace, the device")
+    print("dump and this machine's name -- and no credentials or keystrokes.")
+    return 0
 
 
 def _check_device(device, info, target: str, out: list[str]) -> list[str]:
@@ -664,6 +695,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="let the background agent show desktop notifications (default: yes)",
     )
     p_install.set_defaults(func=cmd_install)
+
+    p_bundle = sub.add_parser(
+        "bundle",
+        help="pack the logs, trace and device dump into one file for a bug report",
+        parents=[common],
+    )
+    p_bundle.add_argument("-o", "--output", type=Path, default=None, metavar="PATH")
+    p_bundle.add_argument("--os", default=None, help="target OS (default: this host's)")
+    p_bundle.set_defaults(func=cmd_bundle)
 
     sub.add_parser(
         "notify-test",

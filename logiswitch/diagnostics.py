@@ -306,14 +306,24 @@ def _run(command: list[str]) -> str:
 # -- why can't we open the device? --------------------------------------------
 
 
-def cannot_open_hint() -> str | None:
+def cannot_open_hint(agent_running: bool = False) -> str | None:
     """Explain an endpoint that enumerates but refuses to open.
 
-    On macOS this is nearly always Input Monitoring: the device is listed, and
-    ``hid_open_path`` fails with a bare "open failed". Reporting that as "no
-    receiver found" -- which is what a caller would otherwise conclude -- sends
-    someone hunting for a hardware fault that is really a checkbox.
+    Order matters. The commonest cause by far is the most boring one: our own
+    background agent already has the device, and only one process can hold it. If
+    that is true, saying "grant Input Monitoring" sends someone to change a system
+    setting that was never the problem -- the same class of confident misdiagnosis
+    this whole diagnostic exists to stop.
     """
+    if agent_running:
+        return (
+            "the receiver is present but will not open, because the logiswitch agent "
+            "already has it -- only one process can. That is normal. For a full device "
+            "dump, stop the agent first, then re-run:\n"
+            "    macOS:   launchctl bootout gui/$(id -u)/com.appbuildersgang.logiswitch\n"
+            "    Windows: schtasks /End /TN LogiSwitch\n"
+            "  ...and start it again afterwards with `logiswitch install`."
+        )
     if is_macos():
         return (
             "the receiver is present but will not open. On macOS this is the Input "

@@ -33,6 +33,11 @@ LIGHT = {
     "good": "#1a7f37",
     "bad": "#cf222e",
     "shadow": "#00000010",
+    # Only the animated scenes use these: they carry their own background, so they
+    # need a page colour distinct from the panels sitting on it, and a second panel
+    # tone for a panel nested inside another.
+    "bg": "#ffffff",
+    "panel2": "#eaeef2",
 }
 DARK = {
     "text": "#e6edf3",
@@ -43,6 +48,8 @@ DARK = {
     "good": "#3fb950",
     "bad": "#f85149",
     "shadow": "#00000040",
+    "bg": "#0d1117",
+    "panel2": "#1c2128",
 }
 
 MONO = "ui-monospace,SFMono-Regular,SF Mono,Menlo,Consolas,monospace"
@@ -277,55 +284,6 @@ def social() -> str:
     return _card_svg(w, h, "".join(body))
 
 
-# -- flow ---------------------------------------------------------------------
-
-
-def flow(p: dict) -> str:
-    body = []
-    stages = [
-        (0, "KVM / Easy-Switch", "hands the keyboard over"),
-        (330, "logiswitch", "hears the device arrive"),
-        (660, "MX Keys S", "writes 0x4531"),
-    ]
-    for x, title, sub in stages:
-        body.append(_box(x, 30, 240, 74, p))
-        body.append(_text(x + 20, 58, title, fill=p["text"], size=14, weight=600))
-        body.append(_text(x + 20, 80, sub, fill=p["muted"], size=12, family=MONO))
-
-    body.append(_arrow(248, 67, 322, 67, p, colour=p["accent"]))
-    body.append(_text(285, 52, "arrival", fill=p["accent"], size=11, family=MONO, anchor="middle"))
-    body.append(_arrow(578, 67, 652, 67, p, colour=p["accent"]))
-    body.append(_text(615, 52, "setHost", fill=p["accent"], size=11, family=MONO, anchor="middle"))
-
-    # A self-loop on the agent: it re-checks on its own when nothing announces.
-    body.append(
-        f'<path d="M 500 106 L 500 140 L 400 140 L 400 108" fill="none" stroke="{p["muted"]}" '
-        f'stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#head)"/>'
-    )
-    body.append(
-        _text(
-            524,
-            144,
-            "20 s backstop — for hardware that announces nothing",
-            fill=p["muted"],
-            size=11,
-            family=MONO,
-        )
-    )
-    body.append(
-        _text(
-            898,
-            20,
-            "no remapping — the keyboard changes mode",
-            fill=p["muted"],
-            size=11,
-            family=MONO,
-            anchor="end",
-        )
-    )
-    return _svg(900, 165, p, "".join(body))
-
-
 # -- latency ------------------------------------------------------------------
 
 
@@ -421,8 +379,717 @@ def architecture(p: dict) -> str:
     return _svg(900, 244, p, "".join(body))
 
 
+# -- animated scenes ----------------------------------------------------------
+#
+# The two scenes below move. Everything else in this file is a still.
+#
+# Motion is CSS ``@keyframes`` rather than SMIL for one reason: it can be turned
+# off. ``prefers-reduced-motion`` is a user setting, not a document one, so unlike
+# ``prefers-color-scheme`` it *does* apply to an SVG rendered inside an ``<img>``.
+# The last rule in every scene is ``animation:none``, and every animated element
+# carries a plain ``opacity``/``width`` attribute holding the value it ends the loop
+# on -- so with motion suppressed the scene collapses to its final, still-meaningful
+# frame instead of to a blank or half-built one.
+#
+# Data in flight is a dashed stroke whose ``stroke-dashoffset`` scrolls, drawn over
+# a faint copy of the same path. That beats translating dots along the wire: it
+# follows a Bezier for free, one element makes the whole train of packets, and the
+# direction of travel is the sign of the offset.
+
+#: Both scenes run on one clock, so any two things can be timed against each other
+#: by writing down when they happen rather than by chaining delays.
+LOOP = 18.0
+
+#: Dash then gap. The scroll distance per period is their sum, or the packets jump.
+#: A short period matters more than it looks: at one dash per 120 units the shorter
+#: runs of wire hold no packet at all and read as dead.
+DASH, GAP = 12.0, 40.0
+
+
+def _kf(name: str, stops: list[tuple[float, dict[str, str]]], loop: float = LOOP) -> str:
+    """A keyframes rule from (seconds, declarations) pairs on the shared clock."""
+    merged: dict[float, dict[str, str]] = {}
+    for t, decls in stops:
+        merged.setdefault(round(min(max(t, 0.0), loop), 4), {}).update(decls)
+    frames = "".join(
+        f"{t / loop * 100:.4f}%{{{';'.join(f'{k}:{v}' for k, v in merged[t].items())}}}"
+        for t in sorted(merged)
+    )
+    return f"@keyframes {name}{{{frames}}}"
+
+
+def _windows(
+    windows: list[tuple[float, float]],
+    *,
+    prop: str = "opacity",
+    hi: str = "1",
+    lo: str = "0",
+    fade: float = 0.3,
+    loop: float = LOOP,
+) -> list[tuple[float, dict[str, str]]]:
+    """Stops holding *lo* except during *windows*, where they hold *hi*.
+
+    Written as intervals because that is how the storyboard reads: this label is up
+    from 12.6 s to 14.0 s. A window touching an end of the loop stays *hi* there, so
+    a state that survives the wrap does not flicker at the seam.
+    """
+    stops = [(0.0, {prop: lo}), (loop, {prop: lo})]
+    for t0, t1 in windows:
+        stops.append((0.0, {prop: hi}) if t0 <= 0 else (max(0.0, t0 - fade), {prop: lo}))
+        stops.append((t0, {prop: hi}))
+        stops.append((t1, {prop: hi}))
+        if t1 < loop:
+            stops.append((min(loop, t1 + fade), {prop: lo}))
+        else:
+            stops.append((loop, {prop: hi}))
+    return stops
+
+
+def _scene(width, height, p, body, *, title, desc, css, ident):
+    """A self-contained card: its own background, its own stylesheet, one title."""
+    css = css + "@media (prefers-reduced-motion:reduce){*{animation:none!important}}"
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" '
+        f'width="{width}" height="{height}" role="img" '
+        f'aria-labelledby="{ident}t {ident}d">'
+        f'<title id="{ident}t">{title}</title><desc id="{ident}d">{desc}</desc>'
+        f"<style><![CDATA[{css}]]></style>"
+        f'<defs><marker id="{ident}arrow" viewBox="0 0 10 10" refX="8.5" refY="5" '
+        f'markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
+        f'<path d="M0 0 L10 5 L0 10 z" fill="{p["accent"]}"/></marker></defs>'
+        f'<rect width="{width}" height="{height}" rx="18" fill="{p["bg"]}"/>'
+        f'<rect x=".5" y=".5" width="{width - 1}" height="{height - 1}" rx="17.5" '
+        f'fill="none" stroke="{p["line"]}"/>'
+        f"{body}</svg>"
+    )
+
+
+def _wire(d, p, *, colour=None, width=1.4):
+    """The static wire: always there, never the thing being looked at."""
+    return f'<path d="{d}" fill="none" stroke="{colour or p["line"]}" stroke-width="{width}"/>'
+
+
+def _packets(d, p, *, scroll, gate=None, colour=None, rest="0"):
+    """Data in flight along *d*, as a train of dashes scrolling over the wire.
+
+    The scroll and the gate that switches the stream on live on separate elements:
+    ``animation`` is one declaration, so two classes on one element would mean one of
+    them silently losing rather than both running.
+
+    *rest* is the opacity to hold when motion is suppressed -- 0 for anything that
+    only means something while it is moving.
+    """
+    path = (
+        f'<path d="{d}" fill="none" stroke="{colour or p["accent"]}" stroke-width="3.5" '
+        f'stroke-linecap="round" stroke-dasharray="{DASH:g} {GAP:g}" class="{scroll}"/>'
+    )
+    if gate is None:
+        return path
+    return f'<g class="{gate}" opacity="{rest}">{path}</g>'
+
+
+def _chip(x, y, w, h, p, label, *, stroke=None, fill=None, size=12.5, colour=None, cls=None):
+    klass = f' class="{cls}"' if cls else ""
+    return (
+        f'<g{klass} opacity="0"><rect x="{x}" y="{y}" width="{w}" height="{h}" '
+        f'rx="{h / 2:g}" fill="{fill or p["panel2"]}" stroke="{stroke or p["accent"]}" '
+        f'stroke-width="1.5"/>'
+        + _text(
+            x + w / 2,
+            y + h / 2 + size * 0.36,
+            label,
+            fill=colour or p["accent"],
+            size=size,
+            family=MONO,
+            anchor="middle",
+            weight=600,
+        )
+        + "</g>"
+    )
+
+
+# -- scene 1: what a KVM does to the layout, and what logiswitch does about it --
+#
+# The storyboard, in seconds on the shared clock. Four beats: it works, the KVM
+# hands over, it is broken, logiswitch fixes it. The one number that is not staging
+# is the write: the packet leaves the PC at 12.6 and reaches the keyboard at 13.7,
+# which is the measured 1.1 s and is why those two are 1.1 apart rather than
+# whatever looked good.
+KVM_ACTS = ((0.0, 4.6), (4.6, 8.2), (8.2, 12.2), (12.2, 18.0))
+KVM_SWITCH = 5.0  #: the KVM changes which host owns the receiver
+KVM_ARRIVE = 12.2  #: the OS reports the device arriving on the PC
+KVM_WRITE = (12.6, 13.7)  #: setHostPlatform in flight -- 1.1 s, measured
+KVM_TOOK = 13.7  #: the keyboard is in Windows mode from here
+
+#: The bus runs through the vertical middle of the keyboard.
+BUS_Y = 288.0
+KVM_WIRE_IN = f"M 324 {BUS_Y:g} L 596 {BUS_Y:g}"
+KVM_ROUTE_MAC = f"M 610 {BUS_Y:g} C 680 {BUS_Y:g} 690 252 746 252 C 800 252 800 209 856 209"
+KVM_ROUTE_PC = f"M 610 {BUS_Y:g} C 680 {BUS_Y:g} 690 324 746 324 C 800 324 800 399 856 399"
+#: The write goes home the way the keystrokes came: same receiver, same wire.
+KVM_WRITE_PATH = (
+    f"M 856 399 C 800 399 800 324 746 324 C 690 324 680 {BUS_Y:g} 610 {BUS_Y:g} L 330 {BUS_Y:g}"
+)
+
+
+def _mini_keyboard(p: dict) -> str:
+    """A suggestion of an MX Keys, with the two keycaps this project owns ringed.
+
+    Not the real vector: the hero already carries that at 400 KB, and here the
+    keyboard is one station out of four. What has to survive the abstraction is the
+    bottom row, because the two dual-legend caps are the whole subject.
+    """
+    x0, y0, w = 62.0, 246.0, 240.0
+    body = [
+        f'<rect x="48" y="232" width="268" height="112" rx="14" fill="{p["panel"]}" '
+        f'stroke="{p["line"]}" stroke-width="1.5"/>'
+    ]
+    for row in range(3):
+        gap, count = 3.0, 12
+        kw = (w - gap * (count - 1)) / count
+        for i in range(count):
+            body.append(
+                f'<rect x="{x0 + i * (kw + gap):.1f}" y="{y0 + row * 22:g}" '
+                f'width="{kw:.1f}" height="16" rx="3.5" fill="{p["bg"]}" '
+                f'stroke="{p["line"]}" stroke-width="1"/>'
+            )
+    # The bottom row is laid out by hand: fn, ctrl, then the two caps that carry
+    # opt/start and cmd/alt, then the spacebar.
+    x, gap = x0, 3.4
+    for i, kw in enumerate((16, 16, 26, 26, 74, 26, 16, 16)):
+        ringed = i in (2, 3)
+        body.append(
+            f'<rect x="{x:.1f}" y="312" width="{kw}" height="16" rx="3.5" '
+            f'fill="{p["bg"]}" stroke="{p["accent"] if ringed else p["line"]}" '
+            f'stroke-width="1"/>'
+        )
+        x += kw + gap
+    body.append(
+        f'<rect x="97.8" y="309" width="61.4" height="22" rx="7" fill="none" '
+        f'stroke="{p["accent"]}" stroke-width="2"/>'
+    )
+    body.append(
+        f'<path d="M 128.5 331 L 128.5 364" fill="none" stroke="{p["accent"]}" '
+        f'stroke-width="1.5" stroke-dasharray="4 4"/>'
+    )
+    return "".join(body)
+
+
+def kvm(p: dict) -> str:
+    w, h = 1280, 600
+    a1, a2, a3, a4 = KVM_ACTS
+    css = [
+        # One period of scroll equals one dash plus one gap, or the train stutters.
+        f"@keyframes pkt{{to{{stroke-dashoffset:{-(DASH + GAP):g}}}}}",
+        f"@keyframes pktr{{to{{stroke-dashoffset:{DASH + GAP:g}}}}}",
+        ".p{animation:pkt 0.75s linear infinite}",
+        ".pr{animation:pktr 0.7s linear infinite}",
+    ]
+
+    def cls(name, windows, **kw):
+        css.append(_kf(name, _windows(windows, **kw)))
+        css.append(f".{name}{{animation:{name} {LOOP:g}s linear infinite}}")
+        return name
+
+    # Typing: to the Mac, then to the PC. The gap in the middle of the PC's stream is
+    # the write -- nothing is being typed while the layout is being corrected.
+    cls("kbMac", [a1[:2]], hi="1", lo="0.34")
+    cls("kbPC", [(KVM_SWITCH, LOOP)], hi="1", lo="0.34")
+    cls("flowIn", [(0.3, 4.8), (5.4, 12.4), (14.2, 17.9)])
+    cls("flowMac", [(0.3, 4.8)])
+    cls("flowPC", [(5.4, 12.4), (14.2, 17.9)])
+    # The selected branch is only a hint that the wire is live. It has to stay well
+    # under the packets, which are the same colour: at equal weight the two merge and
+    # the traffic disappears into the highlight.
+    cls("liveMac", [(0.0, KVM_SWITCH)], hi="0.22", lo="0.06")
+    cls("livePC", [(KVM_SWITCH, LOOP)], hi="0.22", lo="0.06")
+    cls("dotMac", [(0.0, KVM_SWITCH)])
+    cls("dotPC", [(KVM_SWITCH, LOOP)])
+    cls("flowWrite", [KVM_WRITE], fade=0.15)
+    cls("writeTag", [(KVM_WRITE[0] - 0.2, KVM_TOOK + 0.4)])
+    cls("tookTag", [(KVM_TOOK, LOOP)])
+    cls("agent", [(KVM_ARRIVE, LOOP)])
+    cls("legMac", [(0.0, KVM_TOOK)])
+    cls("legWin", [(KVM_TOOK, LOOP)])
+    cls("pcIdle", [(0.0, KVM_SWITCH)])
+    cls("pcWrong", [(KVM_SWITCH, KVM_ARRIVE)])
+    cls("pcBusy", [(KVM_ARRIVE, KVM_TOOK)])
+    cls("pcRight", [(KVM_TOOK, LOOP)])
+    for i, (t0, t1) in enumerate(KVM_ACTS):
+        cls(f"act{i}", [(t0, t1)])
+    css.append(
+        _kf(
+            "ping",
+            [
+                (0.0, {"r": "6px", "opacity": "0"}),
+                (KVM_ARRIVE, {"r": "6px", "opacity": "0.9"}),
+                (KVM_ARRIVE + 1.2, {"r": "26px", "opacity": "0"}),
+                (LOOP, {"r": "6px", "opacity": "0"}),
+            ],
+        )
+    )
+    css.append(f".ping{{animation:ping {LOOP:g}s linear infinite}}")
+
+    body = [
+        _text(
+            48,
+            56,
+            "How a KVM breaks your keyboard — and what logiswitch does about it",
+            fill=p["text"],
+            size=21,
+            weight=700,
+        ),
+        _text(
+            48,
+            84,
+            "The keyboard holds one platform value for every machine on the switch. "
+            "Whoever wrote it last wins — until logiswitch settles it.",
+            fill=p["muted"],
+            size=14.5,
+        ),
+    ]
+
+    # -- the wire, drawn before the boxes so it runs behind them ----------------
+    body += [
+        _wire(f"M 316 {BUS_Y:g} L 380 {BUS_Y:g}", p),
+        f'<path d="M 316 {BUS_Y:g} L 380 {BUS_Y:g}" fill="none" stroke="{p["line"]}" '
+        f'stroke-width="4" stroke-dasharray="2 5"/>',
+        _wire(f"M 380 {BUS_Y:g} L 596 {BUS_Y:g}", p, width=2),
+        _wire(KVM_ROUTE_MAC, p),
+        _wire(KVM_ROUTE_PC, p),
+        f'<g class="liveMac" opacity="0.06">{_wire(KVM_ROUTE_MAC, p, colour=p["accent"], width=2.4)}</g>',
+        f'<g class="livePC" opacity="0.22">{_wire(KVM_ROUTE_PC, p, colour=p["accent"], width=2.4)}</g>',
+        _packets(KVM_WIRE_IN, p, scroll="p", gate="flowIn"),
+        _packets(KVM_ROUTE_MAC, p, scroll="p", gate="flowMac"),
+        _packets(KVM_ROUTE_PC, p, scroll="p", gate="flowPC"),
+        f'<g class="flowWrite" opacity="0">'
+        f'<path d="{KVM_WRITE_PATH}" fill="none" stroke="{p["accent"]}" stroke-width="1.6" '
+        f'opacity="0.35" marker-end="url(#kvmarrow)"/>'
+        + _packets(KVM_WRITE_PATH, p, scroll="pr")
+        + "</g>",
+        _text(348, 272, "2.4 GHz", fill=p["muted"], size=10.5, family=MONO, anchor="middle"),
+        _text(563, 272, "USB", fill=p["muted"], size=10.5, family=MONO, anchor="middle"),
+    ]
+
+    # -- keyboard ---------------------------------------------------------------
+    body += [
+        _text(48, 218, "MX Keys S", fill=p["text"], size=15, weight=700),
+        '<g class="legMac" opacity="0">'
+        + _text(
+            316, 218, "platform 1 · macOS", fill=p["accent"], size=12.5, family=MONO, anchor="end"
+        )
+        + "</g>",
+        '<g class="legWin" opacity="1">'
+        + _text(
+            316, 218, "platform 0 · Windows", fill=p["accent"], size=12.5, family=MONO, anchor="end"
+        )
+        + "</g>",
+        _mini_keyboard(p),
+        f'<rect x="48" y="364" width="268" height="44" rx="12" fill="{p["panel2"]}" '
+        f'stroke="{p["line"]}" stroke-width="1.5"/>',
+        '<g class="legMac" opacity="0">'
+        + _text(
+            182,
+            393,
+            "⌘ cmd     ⌥ opt",
+            fill=p["text"],
+            size=15,
+            family=MONO,
+            weight=700,
+            anchor="middle",
+        )
+        + "</g>",
+        '<g class="legWin" opacity="1">'
+        + _text(160, 393, "alt", fill=p["text"], size=15, family=MONO, weight=700, anchor="end")
+        + _icon(WINDOWS_PATH, 172, 381, 15, p["text"])
+        + _text(196, 393, "start", fill=p["text"], size=15, family=MONO, weight=700)
+        + "</g>",
+        _text(
+            182,
+            428,
+            "one keycap, two legends — this is what changes",
+            fill=p["muted"],
+            size=11.5,
+            anchor="middle",
+        ),
+    ]
+
+    # -- receiver and KVM -------------------------------------------------------
+    body += [
+        f'<rect x="380" y="258" width="150" height="60" rx="12" fill="{p["panel"]}" '
+        f'stroke="{p["line"]}" stroke-width="1.5"/>',
+        _text(455, 284, "Bolt receiver", fill=p["text"], size=14, weight=650, anchor="middle"),
+        _text(455, 304, "one USB dongle", fill=p["muted"], size=11.5, family=MONO, anchor="middle"),
+        f'<rect x="596" y="196" width="150" height="180" rx="12" fill="{p["panel"]}" '
+        f'stroke="{p["line"]}" stroke-width="1.5"/>',
+        _text(671, 224, "KVM", fill=p["text"], size=15, weight=700, anchor="middle"),
+        _text(671, 244, "video + USB", fill=p["muted"], size=11.5, family=MONO, anchor="middle"),
+    ]
+    # The routing inside the switch is drawn on top of it: which port is live is the
+    # only thing the KVM contributes to this story.
+    body += [
+        f'<g class="liveMac" opacity="0.06">'
+        f'<path d="M 610 {BUS_Y:g} C 680 {BUS_Y:g} 690 252 746 252" fill="none" '
+        f'stroke="{p["accent"]}" stroke-width="2.4"/></g>',
+        f'<g class="livePC" opacity="0.22">'
+        f'<path d="M 610 {BUS_Y:g} C 680 {BUS_Y:g} 690 324 746 324" fill="none" '
+        f'stroke="{p["accent"]}" stroke-width="2.4"/></g>',
+        f'<circle cx="746" cy="252" r="6" fill="{p["bg"]}" stroke="{p["line"]}" stroke-width="1.5"/>',
+        f'<circle cx="746" cy="324" r="6" fill="{p["bg"]}" stroke="{p["line"]}" stroke-width="1.5"/>',
+        f'<g class="dotMac" opacity="0"><circle cx="746" cy="252" r="6" fill="{p["accent"]}"/></g>',
+        f'<g class="dotPC" opacity="1"><circle cx="746" cy="324" r="6" fill="{p["accent"]}"/></g>',
+    ]
+
+    # -- the write, labelled ----------------------------------------------------
+    body += [
+        _chip(
+            392,
+            148,
+            300,
+            34,
+            p,
+            "0x4531 · setHostPlatform → 0",
+            cls="writeTag",
+        ),
+        _chip(
+            392,
+            148,
+            108,
+            34,
+            p,
+            "~1.1 s",
+            stroke=p["good"],
+            colour=p["good"],
+            cls="tookTag",
+        ),
+    ]
+
+    # -- machines ---------------------------------------------------------------
+    def machine(y0, icon, name, cls_panel, lines):
+        out = [
+            f'<g class="{cls_panel}" opacity="{"0.34" if cls_panel == "kbMac" else "1"}">',
+            f'<rect x="856" y="{y0}" width="376" height="138" rx="14" fill="{p["panel"]}" '
+            f'stroke="{p["line"]}" stroke-width="1.5"/>',
+            _icon(icon, 880, y0 + 22, 22, p["text"]),
+            _text(916, y0 + 42, name, fill=p["text"], size=16, weight=700),
+            f'<line x1="856" y1="{y0 + 62}" x2="1232" y2="{y0 + 62}" stroke="{p["line"]}"/>',
+        ]
+        for klass, base, state, result, colour in lines:
+            wrap = f'<g class="{klass}" opacity="{base}">' if klass else "<g>"
+            out += [
+                wrap,
+                _text(880, y0 + 88, state, fill=p["muted"], size=12.5, family=MONO),
+                _text(880, y0 + 116, result, fill=colour, size=14, family=MONO, weight=650),
+                "</g>",
+            ]
+        out.append("</g>")
+        return "".join(out)
+
+    body.append(
+        machine(
+            140,
+            APPLE_PATH,
+            "Mac",
+            "kbMac",
+            [(None, "1", "keyboard mode: macOS ✓", "⌘C copies · @ types @", p["good"])],
+        )
+    )
+    body.append(
+        machine(
+            330,
+            WINDOWS_PATH,
+            "Windows PC",
+            "kbPC",
+            [
+                (
+                    "pcIdle",
+                    "0",
+                    "the receiver is on the Mac",
+                    "no keystrokes arrive here",
+                    p["muted"],
+                ),
+                (
+                    "pcWrong",
+                    "0",
+                    "keyboard mode: macOS — wrong host",
+                    '⌘C → Alt+C · @ types "',
+                    p["bad"],
+                ),
+                ("pcBusy", "0", "device arrived · reading 0x4531", "correcting…", p["accent"]),
+                (
+                    "pcRight",
+                    "1",
+                    "keyboard mode: Windows ✓",
+                    "Ctrl+C copies · @ types @",
+                    p["good"],
+                ),
+            ],
+        )
+    )
+    # Arrival is the event this whole project hangs on, so it gets a ping.
+    body.append(
+        f'<g class="agent" opacity="1">'
+        f'<circle cx="856" cy="399" r="6" fill="none" stroke="{p["accent"]}" '
+        f'stroke-width="2" class="ping"/>'
+        f'<rect x="1068" y="358" width="144" height="28" rx="14" fill="{p["panel2"]}" '
+        f'stroke="{p["accent"]}" stroke-width="1.5"/>'
+        f'<circle cx="1088" cy="372" r="4" fill="{p["good"]}"/>'
+        + _text(1102, 377, "logiswitch", fill=p["accent"], size=12.5, family=MONO, weight=600)
+        + "</g>"
+    )
+
+    # -- the caption that carries the story -------------------------------------
+    captions = [
+        (
+            "1",
+            p["accent"],
+            "You type on the Mac. The keyboard is in macOS mode.",
+            "⌘ copies, ⌥ is Option, and the keyboard reports 0x4531 platform 1.",
+        ),
+        (
+            "2",
+            p["accent"],
+            "The KVM hands the receiver to the PC.",
+            "Nothing unplugs. The keyboard is never told it changed hands — and neither is "
+            "Logi Options+, which only reverts a change it observes.",
+        ),
+        (
+            "3",
+            p["bad"],
+            "So the PC inherits a keyboard still in macOS mode.",
+            "⌘ acts as Alt and @ types a quote. Without logiswitch it stays that way until "
+            "you hold Fn+P for seven seconds.",
+        ),
+        (
+            "✓",
+            p["good"],
+            "logiswitch hears the device arrive and writes 0x4531 back down the same wire.",
+            "setHostPlatform 0, then read back to prove it took. No remapping — the keyboard "
+            "itself changes mode. Measured: ~1.1 s.",
+        ),
+    ]
+    body.append(
+        f'<rect x="48" y="486" width="1184" height="66" rx="14" fill="{p["panel2"]}" '
+        f'stroke="{p["line"]}" stroke-width="1.5"/>'
+    )
+    for i, (badge, colour, head, sub) in enumerate(captions):
+        body.append(
+            f'<g class="act{i}" opacity="{1 if i == 3 else 0}">'
+            f'<circle cx="82" cy="519" r="17" fill="{colour}"/>'
+            + _text(82, 525, badge, fill=p["bg"], size=15, weight=700, anchor="middle")
+            + _text(116, 514, head, fill=p["text"], size=15.5, weight=650)
+            + _text(116, 537, sub, fill=p["muted"], size=13)
+            + "</g>"
+        )
+
+    return _scene(
+        w,
+        h,
+        p,
+        "".join(body),
+        ident="kvm",
+        title="How a KVM leaves a Logitech keyboard on the wrong layout, and how logiswitch fixes it",
+        desc=(
+            "One MX Keys S talks to a Bolt receiver plugged into a KVM, which feeds a Mac and "
+            "a Windows PC. Keystrokes flow to the Mac while the keyboard is in macOS mode. The "
+            "KVM hands the receiver to the PC without anything unplugging, so no change event "
+            "exists and the keyboard stays in macOS mode: Command acts as Alt and @ types a "
+            "quote. logiswitch on the PC sees the device arrive and sends HID++ 0x4531 "
+            "setHostPlatform 0 back along the same wire, taking about 1.1 seconds, after which "
+            "the keycap's alt and start legends are the live ones and the PC types correctly."
+        ),
+        css="".join(css),
+    )
+
+
+# -- scene 2: several machines, one keyboard ----------------------------------
+#
+# The arbitration added in 2.1.0. Timings are staged -- a diagram cannot wait out a
+# real 20 s idle window -- but the shape is the algorithm: the bar is time since the
+# last keypress on that machine, the tick is --active-window, and crossing it is
+# what makes a machine stand down.
+ARB_HANDOVER = 8.0  #: typing moves from the Mac to the PC
+ARB_CROSS = 10.4  #: the Mac's idle bar passes the threshold and it yields
+
+
+def arbitration(p: dict) -> str:
+    w, h = 1280, 450
+    css = [
+        f"@keyframes pkt{{to{{stroke-dashoffset:{-(DASH + GAP):g}}}}}",
+        ".p{animation:pkt 0.8s linear infinite}",
+    ]
+
+    def cls(name, windows, **kw):
+        css.append(_kf(name, _windows(windows, **kw)))
+        css.append(f".{name}{{animation:{name} {LOOP:g}s linear infinite}}")
+        return name
+
+    cls("ownMac", [(0.0, ARB_CROSS)])
+    cls("yieldMac", [(ARB_CROSS, LOOP)])
+    cls("ownPC", [(ARB_HANDOVER + 0.3, LOOP)])
+    cls("yieldPC", [(0.0, ARB_HANDOVER + 0.3)])
+    cls("flowMac", [(0.6, ARB_CROSS)])
+    cls("flowPC", [(ARB_HANDOVER + 0.6, 17.8)])
+
+    # The bars are the argument, so they animate width and colour together: busy and
+    # short, or long and grey. Nothing else in the scene needs to move.
+    css.append(
+        _kf(
+            "barMac",
+            [
+                (0.0, {"width": "10px", "fill": p["good"]}),
+                (2.0, {"width": "24px"}),
+                (4.0, {"width": "12px"}),
+                (6.0, {"width": "26px"}),
+                (ARB_HANDOVER, {"width": "14px", "fill": p["good"]}),
+                (ARB_CROSS, {"width": "160px", "fill": p["good"]}),
+                (ARB_CROSS + 0.35, {"fill": p["muted"]}),
+                (13.0, {"width": "320px", "fill": p["muted"]}),
+                (LOOP, {"width": "320px", "fill": p["muted"]}),
+            ],
+        )
+    )
+    css.append(
+        _kf(
+            "barPC",
+            [
+                (0.0, {"width": "320px", "fill": p["muted"]}),
+                (ARB_HANDOVER, {"width": "320px", "fill": p["muted"]}),
+                (ARB_HANDOVER + 0.3, {"width": "12px", "fill": p["good"]}),
+                (11.0, {"width": "26px"}),
+                (14.0, {"width": "13px"}),
+                (LOOP, {"width": "22px", "fill": p["good"]}),
+            ],
+        )
+    )
+    css.append(".bMac{animation:barMac 18s linear infinite}")
+    css.append(".bPC{animation:barPC 18s linear infinite}")
+
+    body = [
+        _text(
+            48,
+            56,
+            "Several machines, one keyboard: whoever is typing keeps it",
+            fill=p["text"],
+            size=21,
+            weight=700,
+        ),
+        _text(
+            48,
+            84,
+            "No configuration, no negotiation — the machines have no channel between them. "
+            "Each just asks its own OS how long since anyone typed.",
+            fill=p["muted"],
+            size=14.5,
+        ),
+    ]
+
+    #: (x, icon, name, platform written, bar class, owner class, yielder class)
+    cards = [
+        (48, APPLE_PATH, "Mac", "platform 1", "bMac", "ownMac", "yieldMac", 1, 0),
+        (456, WINDOWS_PATH, "Windows PC", "platform 0", "bPC", "ownPC", "yieldPC", 0, 1),
+        (864, WINDOWS_PATH, "Windows laptop", "platform 0", None, None, None, 0, 1),
+    ]
+    for x, icon, name, plat, bar, own, yields, own_end, yield_end in cards:
+        body += [
+            f'<rect x="{x}" y="120" width="368" height="150" rx="14" fill="{p["panel"]}" '
+            f'stroke="{p["line"]}" stroke-width="1.5"/>',
+            _icon(icon, x + 24, 142, 20, p["text"]),
+            _text(x + 58, 162, name, fill=p["text"], size=16, weight=700),
+            f'<line x1="{x}" y1="186" x2="{x + 368}" y2="186" stroke="{p["line"]}"/>',
+            _text(x + 24, 212, "idle time", fill=p["muted"], size=11.5, family=MONO),
+            f'<rect x="{x + 24}" y="224" width="320" height="10" rx="5" fill="{p["line"]}"/>',
+        ]
+        if bar:
+            body.append(
+                f'<rect x="{x + 24}" y="224" width="320" height="10" rx="5" '
+                f'fill="{p["muted"]}" class="{bar}"/>'
+            )
+        else:
+            body.append(
+                f'<rect x="{x + 24}" y="224" width="320" height="10" rx="5" fill="{p["muted"]}"/>'
+            )
+        # The threshold is --active-window: cross it and this machine stands down.
+        body += [
+            f'<line x1="{x + 184}" y1="219" x2="{x + 184}" y2="239" stroke="{p["text"]}" '
+            f'stroke-width="1.5" opacity="0.55"/>',
+            _text(x + 184, 213, "20 s", fill=p["text"], size=10.5, family=MONO, anchor="middle"),
+        ]
+        owner = _text(
+            x + 24, 256, "typing now — it owns the keyboard", fill=p["good"], size=12, family=MONO
+        ) + _text(
+            x + 344, 162, f"writes {plat}", fill=p["good"], size=12, family=MONO, anchor="end"
+        )
+        yielder = _text(
+            x + 24, 256, "idle past 20 s — standing down", fill=p["muted"], size=12, family=MONO
+        ) + _text(x + 344, 162, "not writing", fill=p["muted"], size=12, family=MONO, anchor="end")
+        if own:
+            body.append(f'<g class="{own}" opacity="{own_end}">{owner}</g>')
+            body.append(f'<g class="{yields}" opacity="{yield_end}">{yielder}</g>')
+        else:
+            body.append(f"<g>{yielder}</g>")
+
+    # Each card drops to the keyboard; only the owner's drop carries anything.
+    drops = [
+        ("M 232 270 C 232 320 380 376 496 376", "flowMac"),
+        ("M 640 270 L 640 344", "flowPC"),
+        ("M 1048 270 C 1048 320 900 376 784 376", None),
+    ]
+    for d, flow_cls in drops:
+        body.append(_wire(d, p))
+        if flow_cls:
+            body.append(_packets(d, p, scroll="p", gate=flow_cls))
+
+    body += [
+        f'<rect x="496" y="344" width="288" height="64" rx="12" fill="{p["panel"]}" '
+        f'stroke="{p["line"]}" stroke-width="1.5"/>',
+        _text(640, 372, "MX Keys S", fill=p["text"], size=15, weight=700, anchor="middle"),
+        _text(
+            640,
+            392,
+            "one platform slot",
+            fill=p["muted"],
+            size=11.5,
+            family=MONO,
+            anchor="middle",
+        ),
+        _text(
+            640,
+            434,
+            "Only one machine can be receiving your keystrokes, so each reaches the same "
+            "answer on its own — for any number of machines.",
+            fill=p["muted"],
+            size=12.5,
+            anchor="middle",
+        ),
+    ]
+
+    return _scene(
+        w,
+        h,
+        p,
+        "".join(body),
+        ident="arb",
+        title="How several machines share one keyboard without fighting over it",
+        desc=(
+            "A Mac, a Windows PC and a Windows laptop each run the agent and each show a bar "
+            "of how long since someone typed on them, against a 20 second threshold. The Mac "
+            "is being typed on, so its bar stays near zero and it writes the platform; the "
+            "other two are past the threshold and stand down. When typing moves to the PC, "
+            "the Mac's bar grows past the threshold and it yields, and the PC's bar drops to "
+            "zero and it takes over writing the platform to the one MX Keys S they share."
+        ),
+        css="".join(css),
+    )
+
+
 #: Diagrams that need a light and a dark variant, selected with <picture>.
-THEMED = {"flow": flow, "latency": latency, "architecture": architecture}
+THEMED = {
+    "kvm": kvm,
+    "arbitration": arbitration,
+    "latency": latency,
+    "architecture": architecture,
+}
 #: Product cards: they carry their own dark background, so one file serves both
 #: themes and the 400 KB keyboard vector is embedded once, not twice.
 CARDS = {"hero": hero, "social-preview": social}

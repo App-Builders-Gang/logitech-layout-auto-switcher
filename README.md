@@ -39,8 +39,8 @@ If any of these sound familiar, this fixes it:
 ## The fix
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/flow-dark.svg">
-  <img alt="Three stages: the KVM or Easy-Switch hands the keyboard over; logiswitch hears the device arrive; the MX Keys S has HID++ 0x4531 written to it. A dashed self-loop on the agent marks the 20-second backstop used for hardware that announces nothing." src="assets/flow-light.svg" width="900">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/kvm-dark.svg">
+  <img alt="An animated diagram of one MX Keys S talking to a Bolt receiver plugged into a KVM that feeds a Mac and a Windows PC. Keystrokes flow to the Mac while the keyboard is in macOS mode. The KVM hands the receiver to the PC without anything unplugging, so no change event exists and the keyboard stays in macOS mode: Command acts as Alt and @ types a quote. logiswitch on the PC sees the device arrive and sends HID++ 0x4531 setHostPlatform 0 back along the same wire, taking about 1.1 seconds, after which the keycap's alt and start legends are the live ones and the PC types correctly." src="assets/kvm-light.svg" width="900">
 </picture>
 
 Fn+O / Fn+P are not keyboard-only magic. They write a firmware value that is also
@@ -111,6 +111,7 @@ logiswitch set mac     # switch everything once, right now
 logiswitch watch       # run the agent in the foreground
 logiswitch doctor      # why is the keyboard typing the wrong characters?
 logiswitch notify-test # check desktop notifications are permitted
+logiswitch bundle      # pack logs + device dump into one file for a bug report
 logiswitch probe       # full HID++ dump for bug reports
 logiswitch update      # bring this installation up to the latest release
 logiswitch uninstall   # remove the logon service
@@ -131,10 +132,16 @@ stops the running agent first (Windows locks files a running process holds),
 installs, and restarts it; if the install fails the old build is restarted so the
 machine is never left without an agent. The `update` command itself ships from
 v2.0.4 — to get there the first time, re-run the install one-liner above.
+
 ## Several machines sharing one keyboard
 
 Run the agent on every machine. They take turns automatically: **the machine you are
 typing on owns the keyboard, and the rest stand down.**
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/arbitration-dark.svg">
+  <img alt="An animated diagram of a Mac, a Windows PC and a Windows laptop, each running the agent and each showing a bar of how long since someone typed on it, against a 20-second threshold. The Mac is being typed on, so its bar stays near zero and it writes the platform, while the other two are past the threshold and stand down. When typing moves to the PC, the Mac's bar grows past the threshold and it yields, and the PC's bar drops to zero and it takes over writing the platform to the one MX Keys S they share." src="assets/arbitration-light.svg" width="900">
+</picture>
 
 No configuration and no negotiation — which matters, because the machines have no way
 to talk to each other. It works because only one machine can be receiving your
