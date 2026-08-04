@@ -45,6 +45,12 @@ not compete for the setting. Three things were wrong on our side.
 - **Close re-checking eased off on the same bad evidence**, which is backwards: it
   exists for firmware that drops the setting every few seconds.
 
+- **One program was reported as seven.** Opening the Options+ window starts its
+  Electron helpers, and `doctor` listed `logioptionsplus`, `... Helper`,
+  `... Helper (GPU)` and `... Helper (Renderer)` separately — so the line naming what
+  competes for your keyboard became unreadable at exactly the moment someone would be
+  reading it. Helpers now fold into their app; distinct products stay separate.
+
 ### Added
 
 - Software ids are now chosen away from those another program is currently using.
@@ -60,6 +66,24 @@ not compete for the setting. Three things were wrong on our side.
   `docs/PROTOCOL.md`. It was never measured. What is documented instead is what the
   traces show, and how to avoid the conflict: point both at the same OS.
 - `doctor` no longer prints a bare "open failed" above the report that explains it.
+
+### Documented
+
+- **Why Options+ cannot keep the layout right on a KVM**, established by decompiling
+  its agent and instrumenting the running process. Its enforcement is edge-triggered
+  on device registration — one `setHostPlatform` about seven seconds after its agent
+  starts — and never fires again: forcing the platform wrong underneath a running
+  Options+ produced no reaction for 45 s, window open or closed, while restarting its
+  agent corrected it every time. A KVM switch restarts nothing. Also: it addresses a
+  concrete Easy-Switch host index rather than `0xFF`, the same conclusion this project
+  reached the hard way, and the setting *"Always keep the keyboard in Mac layout"*
+  does not drive any of it. Full method and captured frames in `docs/PROTOCOL.md`.
+- The README leads with that argument instead of burying it below the install
+  instructions, and stopped making it twice. `How it works` moved to
+  `CONTRIBUTING.md`, where a module tree is actually useful.
+- New animated diagram of the above, and the hero, latency and architecture diagrams
+  now move too. Every animated asset collapses to a still, readable frame under
+  `prefers-reduced-motion`.
 
 ## 2.2.2 — 2026-08-04
 
