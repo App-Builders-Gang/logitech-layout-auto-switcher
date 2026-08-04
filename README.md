@@ -124,7 +124,7 @@ irm https://raw.githubusercontent.com/App-Builders-Gang/logitech-layout-auto-swi
 curl -fsSL https://raw.githubusercontent.com/App-Builders-Gang/logitech-layout-auto-switcher/main/install.sh | bash
 ```
 
-<img alt="A terminal transcript: pipx install logiswitch and logiswitch install put the agent in place, it finds an MX Keys S on a Logi Bolt receiver and reports it already on macOS; logiswitch doctor then prints the host, the sharing state including turn-taking suspended while Logi Options+ is running, the device and its 0x4531 capability, and finishes with nothing wrong." src="assets/terminal.svg" width="900">
+<img alt="A terminal transcript: the one-line install script puts the agent in place, it finds an MX Keys S on a Logi Bolt receiver and reports it already on macOS; logiswitch doctor then prints the host, the sharing state including turn-taking suspended while Logi Options+ is running, the device and its 0x4531 capability, and finishes with nothing wrong." src="assets/terminal.svg" width="900">
 
 Then `logiswitch doctor` tells you what it found and, if anything is wrong, which of
 the three causes of wrong characters it is.

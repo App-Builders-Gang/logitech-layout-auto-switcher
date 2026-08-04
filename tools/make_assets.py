@@ -1447,7 +1447,13 @@ def optionsplus(p: dict) -> str:
 TERM_PROMPT = "#7ee787"
 #: (delay in seconds, kind, indent in characters, text)
 TERM_LINES: tuple[tuple[float, str, int, str], ...] = (
-    (0.0, "prompt", 0, "pipx install logiswitch && logiswitch install"),
+    (
+        0.0,
+        "prompt",
+        0,
+        "curl -fsSL https://raw.githubusercontent.com/App-Builders-Gang/"
+        "logitech-layout-auto-switcher/main/install.sh | bash",
+    ),
     (0.9, "out", 0, "installed logiswitch 2.3.0"),
     (1.3, "good", 0, "agent running: com.appbuildersgang.logiswitch"),
     (1.9, "out", 0, "watching for device changes via iokit"),
@@ -1523,8 +1529,8 @@ def terminal() -> str:
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" '
         f'height="{h}" role="img" aria-labelledby="termt termd">'
         f'<title id="termt">Installing logiswitch and checking it</title>'
-        f'<desc id="termd">A terminal transcript: pipx install logiswitch and logiswitch '
-        f"install put the agent in place, it finds an MX Keys S on a Logi Bolt receiver and "
+        f'<desc id="termd">A terminal transcript: the one-line install script '
+        f"puts the agent in place, it finds an MX Keys S on a Logi Bolt receiver and "
         f"reports it already on macOS; logiswitch doctor then prints the host, the sharing "
         f"state including turn-taking suspended while Logi Options+ is running, the device "
         f"and its 0x4531 capability, and finishes with nothing wrong.</desc>"
