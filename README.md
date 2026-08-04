@@ -233,19 +233,20 @@ Solaar, are in **[docs/RESOURCES.md](docs/RESOURCES.md)**.
 Options+ *does* drive this feature — so why is the layout still wrong after every
 switch, even with Options+ installed on both machines?
 
-Measured on real hardware: with `logioptionsplus_agent` running, setting the
-keyboard to macOS mode on a Windows host reverted to Windows in **under 0.5 s**,
-every time. Stop that process and the change persists indefinitely. So Options+
-is clearly enforcing something.
+Options+ does enforce a layout — but the trigger is much narrower than it looks.
+Reverse-engineered on macOS 2.6.941708, and confirmed by instrumenting the running
+agent:
 
-The gap is *when* it enforces:
+> **Logi Options+ re-asserts the host's OS layout when its agent registers the
+> device — roughly seven seconds after start — and not again.**
 
-> **Logi Options+ reverts a platform change it observes. It never asserts when its
-> own host merely becomes the active one.**
+Forcing the keyboard to the wrong platform underneath a *running* Options+ produced
+no reaction for 45 seconds, window open or closed. Restarting it with the platform
+wrong corrected it every time.
 
-A KVM switch changes which computer owns the dongle **without changing the
-platform value**. No change event exists, so neither machine's Options+ reacts,
-and the keyboard keeps whatever layout the other computer left it in.
+A KVM switch changes which computer owns the dongle **without restarting the other
+machine's Options+**. Nothing re-asserts, so the keyboard keeps whatever layout the
+other computer left it in.
 
 This agent fires on exactly that missing event — device arrival — and targets the
 same value Options+ wants, so the two cooperate instead of fighting. Full
@@ -363,9 +364,24 @@ Options+ against 349 from us — every one of them a root ping across the receiv
 device slots. Across every log on that machine it never once set the host platform.
 It only writes to revert a change it disagrees with, so agreeing costs nothing.
 
-Point them at different platforms on the same machine and they do fight — Options+
-reverts within half a second, the agent corrects back, and the log says so. Fix it
-by agreeing, not by picking a winner.
+Point them at different platforms on the same machine and they do fight — but not
+continuously. Reverse-engineering the macOS agent (2.6.941708) and instrumenting it
+at runtime shows Options+ re-asserts the OS layout **once, about seven seconds after
+its own agent starts**, and not again: forcing the keyboard to the wrong platform
+under a running Options+ produced no reaction at all, for 45 seconds, even with its
+window open. Restart it with the platform wrong and it corrects it immediately.
+
+Two things worth knowing, both counter to what its UI implies:
+
+- The option **"Always keep the keyboard in Mac layout"** (`keepKeyboardInOsLayout`)
+  does not drive this. Its only consumer, `feature_4531_multi_platform`, is never
+  constructed in this build — hooks on its constructor never fired once. The write
+  comes from `feature_1815_hosts_infos`, which re-asserts an OS-derived platform and
+  never reads that setting.
+- Options+ addresses a **concrete Easy-Switch host index, not `0xFF`** — the same
+  conclusion this project reached the hard way.
+
+Full write-up with the captured frames: **[docs/PROTOCOL.md](docs/PROTOCOL.md)**.
 
 One thing does change while Options+ is running: this machine stops taking turns
 with other machines over a shared keyboard. The protocol reports both a peer machine
