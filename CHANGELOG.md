@@ -17,9 +17,19 @@ not compete for the setting. Three things were wrong on our side.
   844 warnings in seventeen minutes announced that the receiver was missing its 1.2 s
   deadline on a completely healthy machine.
 
-  A reply is now ours if and only if it answers a request we recorded sending. That
-  is exact, needs no guessing about anyone's software id, and keeps a genuine
-  straggler reported as one. The tests replay the real captured traffic.
+  A reply is now ours if and only if it answers a request we recorded sending, and
+  only while one could still be outstanding -- a request that has been answered is
+  forgotten immediately. That last part matters more than it sounds: every HID++
+  host pings every device slot on feature `0x00`, so those keys differ only by
+  software id and the ranges overlap. Holding a completed request's key made the
+  next program's ping look like our own straggler, which is exactly what happened
+  within a minute of deploying this against real Options+ traffic.
+
+- **Error frames reported the wrong software id.** An error carries the function
+  byte one position further along than a normal reply, so reading `frame[3]` got its
+  *feature* instead and every error was logged as software id `0x00` — the id
+  reserved for notifications, making the message misleading about what kind of frame
+  it even was.
 
 - **The agent would have handed the keyboard to a program on its own computer.** It
   stops writing when a peer is present and this machine has been idle -- the right

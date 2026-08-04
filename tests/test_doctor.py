@@ -150,3 +150,19 @@ def test_a_receiver_that_will_not_open_is_not_reported_as_missing(monkeypatch, d
     assert "REFUSED TO OPEN" in out
     assert "no Logitech HID++ endpoint found" not in out
     assert "Input Monitoring" in out or "will not open" in out
+
+
+def test_taking_turns_is_reported_once(monkeypatch, doctor):
+    """Two lines saying opposite things is worse than either one alone."""
+    monkeypatch.setattr(
+        cli.diagnostics,
+        "host_summary",
+        lambda: {
+            "input_source": "com.apple.keylayout.ABC",
+            "non_latin_script": None,
+            "competing_software": ["logioptionsplus_agent"],
+        },
+    )
+    _code, out = doctor("--os", "mac")
+    assert out.count("taking turns :") == 1
+    assert "yields after" not in out, "it will not yield while a local rival is running"

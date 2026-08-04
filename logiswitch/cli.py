@@ -276,6 +276,9 @@ def doctor_report(target_os: str | None = None) -> tuple[str, list[str]]:
     out.append("sharing")
     out.append(f"  this machine : {socket.gethostname()}")
     out.append(f"  input        : {activity.describe(idle)}")
+    rivals = host["competing_software"]
+    # One line, not two: a rival suspends turn-taking outright, so saying "yes,
+    # yields after 20s" above it states the opposite of what will happen.
     if idle is None:
         out.append("  taking turns : NOT possible here (cannot read input activity)")
         findings.append(
@@ -283,18 +286,18 @@ def doctor_report(target_os: str | None = None) -> tuple[str, list[str]]:
             "take turns with another machine sharing the keyboard. If one is competing, "
             "run the agent with --observe on whichever machine should yield."
         )
+    elif rivals:
+        out.append(
+            f"  taking turns : SUSPENDED while {', '.join(rivals)} "
+            f"{'is' if len(rivals) == 1 else 'are'} running here"
+        )
     else:
         out.append(f"  taking turns : yes, yields after {agent_module.ACTIVE_WINDOW:.0f}s idle")
     out.append(
         "  note         : a peer is only visible to a running agent; check the log "
         "for 'another machine is setting this keyboard's platform'"
     )
-    rivals = host["competing_software"]
     if rivals:
-        out.append(
-            f"  taking turns : SUSPENDED while {', '.join(rivals)} "
-            f"{'is' if len(rivals) == 1 else 'are'} running here"
-        )
         finding = (
             f"{', '.join(rivals)} {'is' if len(rivals) == 1 else 'are'} running and "
             "share this HID++ collection. Expected company rather than a fault, and "
