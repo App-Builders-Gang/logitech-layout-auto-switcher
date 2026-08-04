@@ -276,7 +276,28 @@ def competing_software(runner: Callable[[list[str]], str] | None = None) -> list
     except Exception as exc:
         log.debug("could not list processes: %s", exc)
         return []
-    return sorted({name for name in _process_names(output) if _is_competitor(name)})
+    return _collapse_helpers(sorted({n for n in _process_names(output) if _is_competitor(n)}))
+
+
+def _collapse_helpers(names: list[str]) -> list[str]:
+    """Fold an app's helper processes into the app.
+
+    Options+ is an Electron app: opening its window adds ``logioptionsplus Helper``,
+    ``... Helper (GPU)`` and ``... Helper (Renderer)`` beside ``logioptionsplus``.
+    Listing all of them turns one program into seven, and the line that says which
+    software is running here -- read by a human trying to work out what is competing
+    for their keyboard -- becomes unreadable at exactly the moment it matters.
+
+    A name is a helper if a shorter retained name is a prefix of it at a word
+    boundary. That keeps distinct products apart: ``logioptionsplus_updater`` is not
+    ``logioptionsplus`` plus a space, so it survives on its own.
+    """
+    kept: list[str] = []
+    for name in names:  # sorted, so any parent is already in `kept`
+        if any(name.startswith(f"{parent} ") for parent in kept):
+            continue
+        kept.append(name)
+    return kept
 
 
 def _process_names(output: str) -> list[str]:

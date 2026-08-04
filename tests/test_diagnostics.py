@@ -174,3 +174,26 @@ def test_openlogi_and_logiops_are_recognised(monkeypatch):
         "logid",
         "openlogi-agent",
     ]
+
+
+def test_electron_helpers_collapse_into_their_app(monkeypatch):
+    """Opening the Options+ window must not turn one program into seven.
+
+    The line naming competing software is read by someone working out what is
+    fighting for their keyboard; seven near-identical entries make it useless.
+    """
+    monkeypatch.setattr(diagnostics, "is_windows", lambda: False)
+    output = (
+        "logioptionsplus\n"
+        "logioptionsplus Helper\n"
+        "logioptionsplus Helper (GPU)\n"
+        "logioptionsplus Helper (Renderer)\n"
+        "logioptionsplus_agent\n"
+        "logioptionsplus_updater\n"
+        "Finder\n"
+    )
+    assert diagnostics.competing_software(runner=lambda _cmd: output) == [
+        "logioptionsplus",
+        "logioptionsplus_agent",
+        "logioptionsplus_updater",
+    ], "helpers fold in; separate products do not"

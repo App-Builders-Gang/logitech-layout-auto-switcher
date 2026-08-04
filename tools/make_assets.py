@@ -15,6 +15,7 @@ Numbers here are measured, not decorative. See CHANGELOG 2.0.2 for where the
 from __future__ import annotations
 
 import argparse
+import html
 import math
 import shutil
 import subprocess
@@ -57,9 +58,12 @@ SANS = "-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif"
 
 
 def _text(x, y, s, *, fill, size=13, family=SANS, weight=400, anchor="start", opacity=1.0):
+    # Escaped, because SVG is XML: a shell line like `a && b` is a parse error, not a
+    # rendering quirk, and the file simply fails to load.
+    body = html.escape(str(s), quote=False)
     return (
         f'<text x="{x}" y="{y}" fill="{fill}" font-family="{family}" font-size="{size}" '
-        f'font-weight="{weight}" text-anchor="{anchor}" opacity="{opacity}">{s}</text>'
+        f'font-weight="{weight}" text-anchor="{anchor}" opacity="{opacity}">{body}</text>'
     )
 
 
@@ -100,6 +104,11 @@ KEYBOARD = ASSETS / "keyboard-mx-keys.svg"
 #: The committed vector's own coordinate system, so annotations can be placed
 #: against real keycaps rather than guessed at.
 KB_VIEWBOX = (145, 292, 1712, 552)
+#: Which legend the hero shows as live, on the shared clock. Long holds and a slow
+#: crossfade: this is a banner someone glances at, not a demo they sit through.
+HERO_MAC = (0.0, 7.6)
+HERO_WIN = (9.0, 16.6)
+
 #: The dual-legend cluster on the bottom row: opt/start and cmd/alt share a keycap,
 #: and which legend is live is exactly what this project switches. Measured off a
 #: 1:1 render by scanning for the keycap edges, not eyeballed -- a ring that misses
@@ -171,14 +180,23 @@ def _keyboard(scale: float, x: float, y: float) -> str:
     )
 
 
-def _card_svg(width, height, body):
+def _card_svg(width, height, body, *, css: str = ""):
+    """A product card. *css* opts it into motion on the same terms as :func:`_scene`.
+
+    The reduced-motion rule is appended here rather than left to the caller, so a card
+    cannot ship animation without an off switch.
+    """
+    style = ""
+    if css:
+        css += "@media (prefers-reduced-motion:reduce){*{animation:none!important}}"
+        style = f"<style><![CDATA[{css}]]></style>"
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
         f'viewBox="0 0 {width} {height}" width="{width}" height="{height}" role="img">'
         f'<defs><marker id="kbhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" '
         f'markerHeight="6" orient="auto-start-reverse">'
         f'<path d="M 0 0 L 10 5 L 0 10 z" fill="{CARD["accent"]}"/></marker></defs>'
-        f"{body}</svg>"
+        f"{style}{body}</svg>"
     )
 
 
@@ -218,17 +236,31 @@ def hero() -> str:
         f'<rect x="{hx - 6}" y="{hy - 6}" width="{hw + 12}" height="{hh + 12}" rx="12" '
         f'fill="none" stroke="{c["accent"]}" stroke-width="3"/>'
     )
-    body.append(
-        f'<path d="M {hx + hw / 2} {hy + hh + 10} L {hx + hw / 2} 742" fill="none" '
-        f'stroke="{c["accent"]}" stroke-width="2" stroke-dasharray="6 5"/>'
-    )
+
+    # The one thing the hero should *show* rather than caption: the same keycap
+    # meaning one thing, then the other. A leader line runs from the ringed keys to
+    # whichever card is live, and the two swap on the shared clock. Only opacity is
+    # animated, and only on four small elements -- the 400 KB keyboard vector below
+    # is never touched, so this costs the file almost nothing.
+    css = []
+    for name, window in (("hmac", HERO_MAC), ("hwin", HERO_WIN)):
+        css.append(_kf(name, _windows([window], fade=0.6)))
+        css.append(f".{name}{{animation:{name} {LOOP:g}s linear infinite}}")
+
+    ring_x, ring_y = hx + hw / 2, hy + hh + 10
+    for cls, target_x, rest in (("hmac", 313.0, "1"), ("hwin", 875.0, "0")):
+        body.append(
+            f'<path class="{cls}" opacity="{rest}" d="M {ring_x} {ring_y} '
+            f'L {target_x} 748" fill="none" '
+            f'stroke="{c["accent"]}" stroke-width="2" stroke-dasharray="6 5"/>'
+        )
 
     cards = [
-        (APPLE_PATH, "on macOS", "⌘ cmd   ⌥ opt", "platform 1", c["accent"]),
-        (WINDOWS_PATH, "on Windows", "alt   start", "platform 0", c["accent"]),
-        (None, "either way", "corrected in ~1 s", "measured, not claimed", c["good"]),
+        (APPLE_PATH, "on macOS", "⌘ cmd   ⌥ opt", "platform 1", c["accent"], "hmac", "1"),
+        (WINDOWS_PATH, "on Windows", "alt   start", "platform 0", c["accent"], "hwin", "0"),
+        (None, "either way", "corrected in ~1 s", "measured, not claimed", c["good"], None, None),
     ]
-    for i, (icon, title, keys, note, colour) in enumerate(cards):
+    for i, (icon, title, keys, note, colour, cls, rest) in enumerate(cards):
         x = 48 + i * 562
         body.append(
             f'<rect x="{x}" y="{754}" width="530" height="104" rx="14" fill="{c["panel"]}" '
@@ -241,7 +273,14 @@ def hero() -> str:
         body.append(_text(text_x, 790, title, fill=c["muted"], size=18, weight=600))
         body.append(_text(x + 26, 830, keys, fill=c["text"], size=25, family=MONO, weight=700))
         body.append(_text(x + 504, 830, note, fill=colour, size=15, family=MONO, anchor="end"))
-    return _card_svg(w, h, "".join(body))
+        if cls:
+            # Drawn over the card rather than replacing its border, so the resting
+            # state -- and the reduced-motion state -- is still a complete card.
+            body.append(
+                f'<rect class="{cls}" opacity="{rest}" x="{x}" y="754" width="530" '
+                f'height="104" rx="14" fill="none" stroke="{c["accent"]}" stroke-width="2.5"/>'
+            )
+    return _card_svg(w, h, "".join(body), css="".join(css))
 
 
 def social() -> str:
@@ -306,20 +345,52 @@ def latency(p: dict) -> str:
         ),
         _text(900, 18, "log scale", fill=p["muted"], size=11, family=MONO, anchor="end"),
     ]
+    # Each bar grows from nothing, one after another, so the eye is walked down the
+    # three rows in the order the story happened rather than being handed the answer.
+    # The base `width` attribute is the final value, so with motion suppressed the
+    # chart is simply the finished chart.
+    css = []
     for i, (label, seconds, note, colour) in enumerate(rows):
         y = 46 + i * 52
         width = max(6.0, 640.0 * math.log(1 + seconds) / span)
+        start = 0.4 + i * 0.8
+        css.append(
+            _kf(
+                f"latb{i}",
+                [
+                    (0.0, {"width": "0px"}),
+                    (start, {"width": "0px"}),
+                    (start + 1.4, {"width": f"{width:.1f}px"}),
+                    (LOOP, {"width": f"{width:.1f}px"}),
+                ],
+            )
+        )
+        css.append(f".latb{i}{{animation:latb{i} {LOOP:g}s linear infinite}}")
         body.append(_text(0, y + 20, label, fill=p["text"], size=13, family=MONO, weight=600))
         body.append(
             f'<rect x="72" y="{y}" width="{width:.1f}" height="26" rx="5" fill="{colour}" '
-            f'opacity="0.85"/>'
+            f'opacity="0.85" class="latb{i}"/>'
         )
         value = f"{seconds:.1f} s" if seconds < 10 else f"{seconds:.0f} s"
         body.append(
             _text(72 + width + 12, y + 18, value, fill=p["text"], size=13, family=MONO, weight=600)
         )
         body.append(_text(72, y + 44, note, fill=p["muted"], size=11.5))
-    return _svg(900, 212, p, "".join(body))
+    return _scene(
+        940,
+        252,
+        p,
+        f'<g transform="translate(24,22)">{"".join(body)}</g>',
+        ident="lat",
+        title="How long an Easy-Switch return stays on the wrong layout",
+        desc=(
+            "Three bars on a log scale. Before the fix the worst case was the 600 second "
+            "safety heartbeat; version 2.0.1 saw the reconnect but its backoff had already "
+            "reached 32 seconds; version 2.0.2 believes the device when it announces itself "
+            "and recovers in 1.1 seconds."
+        ),
+        css="".join(css),
+    )
 
 
 # -- architecture -------------------------------------------------------------
@@ -327,6 +398,12 @@ def latency(p: dict) -> str:
 
 def architecture(p: dict) -> str:
     body = [
+        # _arrow points at a marker called "head", which _svg used to define and
+        # _scene does not -- it names its own after the scene. Carry one here rather
+        # than teach every other scene about a marker it will never draw.
+        f'<defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" '
+        f'markerHeight="6" orient="auto-start-reverse">'
+        f'<path d="M 0 0 L 10 5 L 0 10 z" fill="{p["muted"]}"/></marker></defs>',
         _text(
             0,
             18,
@@ -365,6 +442,25 @@ def architecture(p: dict) -> str:
     body.append(_arrow(258, 77, 332, 100, p))
     body.append(_arrow(258, 171, 332, 148, p))
     body.append(_arrow(538, 124, 612, 124, p, colour=p["accent"]))
+
+    # One event walks watcher -> queue -> worker and nothing else moves, because the
+    # claim being made is that nothing else *does* move: the threads are asleep in the
+    # kernel until the hardware says otherwise.
+    legs = [
+        ("M 258 77 L 332 100", 0.0),
+        ("M 258 171 L 332 148", 6.0),
+        ("M 538 124 L 612 124", 0.0),
+    ]
+    css = [
+        f"@keyframes apkt{{to{{stroke-dashoffset:{-(DASH + GAP):g}}}}}",
+        ".ap{animation:apkt 0.9s linear infinite}",
+    ]
+    for i, (d, start) in enumerate(legs):
+        gate = f"aleg{i}"
+        css.append(_kf(gate, _windows([(start, start + 3.4)], fade=0.25)))
+        css.append(f".{gate}{{animation:{gate} {LOOP:g}s linear infinite}}")
+        body.append(_packets(d, p, scroll="ap", gate=gate))
+
     body.append(
         _text(
             450,
@@ -376,7 +472,22 @@ def architecture(p: dict) -> str:
             anchor="middle",
         )
     )
-    return _svg(900, 244, p, "".join(body))
+    return _scene(
+        944,
+        288,
+        p,
+        f'<g transform="translate(22,22)">{"".join(body)}</g>',
+        ident="arch",
+        title="How the agent waits: every thread parked in the kernel until hardware moves",
+        desc=(
+            "A watcher thread on IOKit or cfgmgr32 reports a device arriving or leaving, and "
+            "a reader thread per handle sits blocked in hid_read where an unsolicited frame "
+            "means the device is back. Both feed a coalesced, bounded event queue that never "
+            "blocks a reader, and the queue feeds a worker thread which reads the platform "
+            "and writes only if it is wrong."
+        ),
+        css="".join(css),
+    )
 
 
 # -- animated scenes ----------------------------------------------------------
@@ -488,10 +599,18 @@ def _packets(d, p, *, scroll, gate=None, colour=None, rest="0"):
     return f'<g class="{gate}" opacity="{rest}">{path}</g>'
 
 
-def _chip(x, y, w, h, p, label, *, stroke=None, fill=None, size=12.5, colour=None, cls=None):
+def _chip(
+    x, y, w, h, p, label, *, stroke=None, fill=None, size=12.5, colour=None, cls=None, opacity="0"
+):
+    """A pill label. Hidden by default because most chips are revealed by a class.
+
+    *opacity* is the value it holds when nothing animates it -- ``"1"`` for a chip
+    that is simply always there, which is also what it collapses to under
+    ``prefers-reduced-motion``.
+    """
     klass = f' class="{cls}"' if cls else ""
     return (
-        f'<g{klass} opacity="0"><rect x="{x}" y="{y}" width="{w}" height="{h}" '
+        f'<g{klass} opacity="{opacity}"><rect x="{x}" y="{y}" width="{w}" height="{h}" '
         f'rx="{h / 2:g}" fill="{fill or p["panel2"]}" stroke="{stroke or p["accent"]}" '
         f'stroke-width="1.5"/>'
         + _text(
@@ -1083,16 +1202,339 @@ def arbitration(p: dict) -> str:
     )
 
 
+# -- scene 3: what Options+ does on a KVM, measured -----------------------------
+#
+# The one asset in this file whose subject is another program, so it is the one that
+# has to be scrupulous. Every number below came off a real machine:
+#
+#   Logi Options+ 2.6.941708 on macOS, decompiled and then instrumented with Frida.
+#   Its enforcement is edge-triggered on device registration -- one setHostPlatform
+#   about seven seconds after its own agent starts -- and never fires again. Forcing
+#   the keyboard to the wrong platform underneath a running Options+ produced no
+#   reaction for 45 s, with its window open and with it closed. Restarting its agent
+#   corrected the platform every time.
+#
+# So the claim being drawn is not "Options+ is broken". It is narrower and stronger:
+# a KVM switch restarts nothing, and Options+ only acts when it starts.
+#
+# Unlike the other two scenes this timeline is *static* and only the playhead moves.
+# That is deliberate: the argument is the shape of the whole 18 s, so a reader with
+# reduced motion on should still get all of it rather than a single frame.
+
+OP_AXIS = (300.0, 1232.0)  #: x range of the time axis
+OP_SPAN = OP_AXIS[1] - OP_AXIS[0]
+OP_START = 1.0  #: Options+ agent start, and its one and only write
+OP_SWITCHES = (4.0, 8.0, 12.0, 16.0)  #: the KVM hands the keyboard to the other machine
+OP_FIX = 1.1  #: what logiswitch takes to correct an arrival -- measured, same as KVM_WRITE
+
+
+def _op_x(t: float) -> float:
+    """Seconds on the shared clock to x on the timeline."""
+    return OP_AXIS[0] + OP_SPAN * (t / LOOP)
+
+
+def _op_strip(
+    ident: str, y: float, h: float, spans: list[tuple[float, float, str]], p: dict
+) -> str:
+    """A state strip: one continuous bar whose colour changes over time.
+
+    The segments are square-cornered and the whole strip is clipped to a rounded
+    rectangle, so only the two outer ends are round. Rounding each segment instead
+    reads as a row of separate pills -- which says "several things" when the point is
+    that this is one keyboard, continuously, for eighteen seconds.
+    """
+    out = [
+        f'<clipPath id="{ident}"><rect x="{OP_AXIS[0]:g}" y="{y:g}" width="{OP_SPAN:g}" '
+        f'height="{h:g}" rx="{h / 2:g}"/></clipPath>',
+        f'<g clip-path="url(#{ident})">',
+        f'<rect x="{OP_AXIS[0]:g}" y="{y:g}" width="{OP_SPAN:g}" height="{h:g}" '
+        f'fill="{p["panel2"]}"/>',
+    ]
+    for t0, t1, colour in spans:
+        x0, x1 = _op_x(t0), _op_x(t1)
+        out.append(
+            f'<rect x="{x0:.1f}" y="{y:g}" width="{x1 - x0:.1f}" height="{h:g}" fill="{colour}"/>'
+        )
+    out.append("</g>")
+    return "".join(out)
+
+
+def optionsplus(p: dict) -> str:
+    w, h = 1280, 500
+    # The playhead carries its own opacity through the keyframes and rests at 0, so
+    # suppressing motion removes it rather than parking it at the left edge. It is
+    # the one element here that means nothing standing still: the timeline is the
+    # argument and stays completely readable without it.
+    css = [
+        f"@keyframes opsweep{{from{{transform:translateX(0);opacity:.85}}"
+        f"to{{transform:translateX({OP_SPAN:g}px);opacity:.85}}}}",
+        f".ophead{{animation:opsweep {LOOP:g}s linear infinite}}",
+    ]
+
+    body = [
+        _text(
+            48,
+            56,
+            "Logi Options+ enforces the layout once, when its agent starts",
+            fill=p["text"],
+            size=21,
+            weight=700,
+        ),
+        _text(
+            48,
+            84,
+            "A KVM switch does not restart anything, so nothing re-asserts. "
+            "Measured on Options+ 2.6.941708 for macOS: decompiled, then instrumented "
+            "while running.",
+            fill=p["muted"],
+            size=14.5,
+        ),
+    ]
+
+    # Each switch drops a faint guide through both strips: without it the reader has
+    # to measure across the gap to see that the same instant is red above and red
+    # below, which is the entire comparison.
+    for t in OP_SWITCHES:
+        x = _op_x(t)
+        body.append(
+            f'<line x1="{x:.1f}" y1="136" x2="{x:.1f}" y2="342" stroke="{p["line"]}" '
+            f'stroke-width="1.5" stroke-dasharray="4 5"/>'
+        )
+
+    # -- lane 1: Options+ alone --------------------------------------------------
+    body += [
+        _text(48, 148, "Logi Options+ only", fill=p["text"], size=16, weight=700),
+        _text(48, 170, "one write, at start", fill=p["muted"], size=11.5, family=MONO),
+        _op_strip(
+            "opsA",
+            136,
+            26,
+            [(0.0, OP_SWITCHES[0], p["good"]), (OP_SWITCHES[0], LOOP, p["bad"])],
+            p,
+        ),
+    ]
+    # Its single write, and then the silence that is the whole point.
+    body.append(
+        f'<line x1="{_op_x(OP_START):.1f}" y1="120" x2="{_op_x(OP_START):.1f}" y2="176" '
+        f'stroke="{p["accent"]}" stroke-width="2"/>'
+    )
+    body.append(
+        _text(
+            _op_x(OP_START),
+            112,
+            "agent start — setHostPlatform",
+            fill=p["accent"],
+            size=11.5,
+            family=MONO,
+            anchor="middle",
+        )
+    )
+    body.append(
+        _text(
+            (_op_x(OP_SWITCHES[0]) + OP_AXIS[1]) / 2,
+            155,
+            "wrong layout, and nothing comes to fix it",
+            fill=p["bg"],
+            size=13,
+            weight=700,
+            anchor="middle",
+        )
+    )
+
+    # -- lane 2: the KVM itself --------------------------------------------------
+    body.append(_text(48, 246, "KVM switch", fill=p["text"], size=16, weight=700))
+    body.append(
+        f'<line x1="{OP_AXIS[0]:g}" y1="240" x2="{OP_AXIS[1]:g}" y2="240" '
+        f'stroke="{p["line"]}" stroke-width="1.5"/>'
+    )
+    for i, t in enumerate(OP_SWITCHES, start=1):
+        x = _op_x(t)
+        body.append(
+            f'<line x1="{x:.1f}" y1="222" x2="{x:.1f}" y2="258" stroke="{p["text"]}" '
+            f'stroke-width="2.5" opacity="0.75"/>'
+        )
+        body.append(
+            _text(x, 214, f"switch {i}", fill=p["muted"], size=11, family=MONO, anchor="middle")
+        )
+
+    # -- lane 3: with logiswitch -------------------------------------------------
+    spans: list[tuple[float, float, str]] = []
+    edges = [0.0]
+    for t in OP_SWITCHES:
+        spans.append((edges[-1], t, p["good"]))
+        spans.append((t, min(t + OP_FIX, LOOP), p["bad"]))
+        edges.append(min(t + OP_FIX, LOOP))
+    spans.append((edges[-1], LOOP, p["good"]))
+    body += [
+        _text(48, 328, "With logiswitch", fill=p["text"], size=16, weight=700),
+        _text(48, 350, "corrects every arrival", fill=p["muted"], size=11.5, family=MONO),
+        _op_strip("opsB", 316, 26, spans, p),
+    ]
+    for t in OP_SWITCHES:
+        mid = _op_x(t + OP_FIX / 2)
+        body.append(
+            _text(mid, 308, f"{OP_FIX:.1f} s", fill=p["bad"], size=11, family=MONO, anchor="middle")
+        )
+
+    # -- the playhead ------------------------------------------------------------
+    # One element crossing both strips: it is what makes the two lanes read as the
+    # same eighteen seconds rather than two unrelated pictures.
+    body.append(
+        f'<g class="ophead" opacity="0"><line x1="{OP_AXIS[0]:g}" y1="118" '
+        f'x2="{OP_AXIS[0]:g}" y2="356" stroke="{p["accent"]}" stroke-width="2"/>'
+        f'<circle cx="{OP_AXIS[0]:g}" cy="118" r="4.5" fill="{p["accent"]}"/></g>'
+    )
+
+    # -- legend and the evidence -------------------------------------------------
+    body += [
+        f'<rect x="48" y="392" width="16" height="16" rx="4" fill="{p["good"]}"/>',
+        _text(72, 405, "layout matches the machine", fill=p["muted"], size=12.5),
+        f'<rect x="284" y="392" width="16" height="16" rx="4" fill="{p["bad"]}"/>',
+        _text(308, 405, "Cmd and Option swapped", fill=p["muted"], size=12.5),
+    ]
+    body.append(
+        _text(
+            48,
+            456,
+            "Forcing the platform wrong underneath a running Options+ changed nothing for "
+            "45 s, window open or closed. Restarting its agent corrected it every time — "
+            "which a KVM switch never does.",
+            fill=p["muted"],
+            size=12.5,
+        )
+    )
+
+    return _scene(
+        w,
+        h,
+        p,
+        "".join(body),
+        ident="op",
+        title="Why Logi Options+ cannot keep the layout right on a KVM",
+        desc=(
+            "Two eighteen-second timelines over the same four KVM switches. On the first, "
+            "with only Logi Options+ installed, a single setHostPlatform write happens when "
+            "its agent starts; from the first KVM switch onwards the strip is red for the "
+            "rest of the run, because Options+ only acts at start-up and a KVM switch starts "
+            "nothing. On the second, with logiswitch running, each switch turns the strip red "
+            "for 1.1 seconds and then green again. Measured on Logi Options+ 2.6.941708 for "
+            "macOS by decompiling its agent and instrumenting the running process."
+        ),
+        css="".join(css),
+    )
+
+
+# -- the install, as it actually looks -----------------------------------------
+#
+# One file rather than a light/dark pair: a terminal is dark in both READMEs, the
+# same reason the hero and the social card carry their own background.
+#
+# Every line below is real output, pasted from a run on the machine this was written
+# on -- including the two lines nobody would invent, `taking turns : SUSPENDED` and
+# the receiver refusing to open because our own agent already holds it. A mocked-up
+# terminal that only ever shows success is the kind of screenshot people have learned
+# to distrust.
+
+TERM_PROMPT = "#7ee787"
+#: (delay in seconds, kind, indent in characters, text)
+TERM_LINES: tuple[tuple[float, str, int, str], ...] = (
+    (0.0, "prompt", 0, "pipx install logiswitch && logiswitch install"),
+    (0.9, "out", 0, "installed logiswitch 2.3.0"),
+    (1.3, "good", 0, "agent running: com.appbuildersgang.logiswitch"),
+    (1.9, "out", 0, "watching for device changes via iokit"),
+    (2.3, "good", 0, "found MX Keys S on Logi Bolt receiver at index 5 via MULTIPLATFORM 0x4531"),
+    (2.7, "good", 0, "MX Keys S already on macos"),
+    (3.6, "prompt", 0, "logiswitch doctor"),
+    (4.4, "out", 0, "logiswitch 2.3.0 doctor"),
+    (4.7, "dim", 0, "target OS : macos"),
+    (5.0, "dim", 0, "agent     : installed, running"),
+    (5.6, "out", 0, "sharing"),
+    (5.9, "dim", 2, "this machine : Abdelraoufs-MacBook-Pro.local"),
+    (6.2, "dim", 2, "input        : in use now"),
+    (6.5, "warn", 2, "taking turns : SUSPENDED while logioptionsplus_agent is running here"),
+    (7.1, "out", 0, "devices"),
+    (7.4, "dim", 2, "Logi Bolt receiver  (046D:C548)"),
+    (7.7, "dim", 4, "device index 5: MX Keys S (HID++ 4.5)"),
+    (8.0, "good", 6, "capability: MULTIPLATFORM 0x4531"),
+    (8.6, "good", 0, "Nothing is wrong at this moment."),
+)
+
+
+def terminal() -> str:
+    w, h = 1080, 560
+    x0, y0, step = 34.0, 96.0, 23.0
+    colours = {
+        "prompt": CARD["text"],
+        "out": CARD["text"],
+        "dim": CARD["muted"],
+        "good": CARD["good"],
+        "warn": "#d29922",
+    }
+    css = [
+        "@keyframes tln{from{opacity:0}to{opacity:1}}",
+        ".tl{animation:tln .34s ease-out both}",
+        "@media (prefers-reduced-motion:reduce){*{animation:none!important}}",
+    ]
+    body = [
+        f'<rect width="{w}" height="{h}" rx="14" fill="#0b0d12"/>',
+        f'<rect x=".5" y=".5" width="{w - 1}" height="{h - 1}" rx="13.5" fill="none" '
+        f'stroke="{CARD["edge"]}"/>',
+        f'<path d="M0 14 a14 14 0 0 1 14 -14 h{w - 28} a14 14 0 0 1 14 14 v30 h-{w} z" '
+        f'fill="#151a22"/>',
+        '<circle cx="26" cy="22" r="6" fill="#ff5f57"/>',
+        '<circle cx="46" cy="22" r="6" fill="#febc2e"/>',
+        '<circle cx="66" cy="22" r="6" fill="#28c840"/>',
+        _text(
+            w / 2,
+            27,
+            "logiswitch — install and check",
+            fill=CARD["muted"],
+            size=12.5,
+            family=MONO,
+            anchor="middle",
+        ),
+    ]
+    for i, (delay, kind, depth, line) in enumerate(TERM_LINES):
+        y = y0 + i * step
+        # Lines land in order and stay: this is a transcript, not a loop, so the
+        # final frame -- which is also the reduced-motion frame -- is the whole run.
+        prefix = ""
+        if kind == "prompt":
+            prefix = _text(x0, y, "$", fill=TERM_PROMPT, size=13.5, family=MONO, weight=700)
+        # 8.13 px per character at 13.5 px in this mono stack, so doctor's own
+        # indentation survives instead of every line stacking flush left.
+        indent = x0 + (20 if kind == "prompt" else 34) + depth * 8.13
+        body.append(
+            f'<g class="tl" style="animation-delay:{delay:g}s">'
+            + prefix
+            + _text(indent, y, line, fill=colours[kind], size=13.5, family=MONO)
+            + "</g>"
+        )
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" '
+        f'height="{h}" role="img" aria-labelledby="termt termd">'
+        f'<title id="termt">Installing logiswitch and checking it</title>'
+        f'<desc id="termd">A terminal transcript: pipx install logiswitch and logiswitch '
+        f"install put the agent in place, it finds an MX Keys S on a Logi Bolt receiver and "
+        f"reports it already on macOS; logiswitch doctor then prints the host, the sharing "
+        f"state including turn-taking suspended while Logi Options+ is running, the device "
+        f"and its 0x4531 capability, and finishes with nothing wrong.</desc>"
+        f"<style><![CDATA[{''.join(css)}]]></style>"
+        f"{''.join(body)}</svg>"
+    )
+
+
 #: Diagrams that need a light and a dark variant, selected with <picture>.
 THEMED = {
     "kvm": kvm,
+    "optionsplus": optionsplus,
     "arbitration": arbitration,
     "latency": latency,
     "architecture": architecture,
 }
 #: Product cards: they carry their own dark background, so one file serves both
 #: themes and the 400 KB keyboard vector is embedded once, not twice.
-CARDS = {"hero": hero, "social-preview": social}
+CARDS = {"hero": hero, "social-preview": social, "terminal": terminal}
 
 
 def build() -> dict[Path, str]:
