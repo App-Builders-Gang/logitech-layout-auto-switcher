@@ -341,32 +341,6 @@ real hardware, the announcement path recovers in ~1 s and the backstop never fir
 partial open closes what it already acquired, signals unwind the whole stack, and
 the static platform table is cached so the common case is a single read.
 
-## How it works
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.svg">
-  <img alt="The watcher thread (IOKit or cfgmgr32, reporting devices arriving and leaving) and one reader thread per handle (blocked in hid_read, treating an unsolicited frame as the device being back) both feed a bounded, coalescing event queue that never blocks a reader. The queue feeds the worker thread, which reads the platform and writes only if it is wrong. Handles are closed only after their readers are joined." src="assets/architecture-light.svg" width="900">
-</picture>
-
-```
-logiswitch/
-  hidpp/protocol.py    framing, error decoding, OS masks — pure, fully unit-tested
-  hidpp/transport.py   handles + one reader thread each + request/notification dispatch
-  hidpp/device.py      capability probing and the cached platform table
-  hidpp/discovery.py   endpoint enumeration and fan-out device scan
-  watchers/windows.py  CM_Register_Notification (cfgmgr32)
-  watchers/darwin.py   IOKit service matching on a dedicated CFRunLoop thread
-  agent.py             the event-driven supervisor
-```
-
-Tests replay the exact byte sequences captured from real hardware
-(`tests/fakehid.py`), so the protocol layer is covered on machines with no
-Logitech device attached.
-
-```bash
-pip install -e ".[dev]" && pytest
-```
-
 ## FAQ
 
 **Does this modify my keyboard's firmware?**
