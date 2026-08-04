@@ -12,7 +12,7 @@ import zipfile
 
 import pytest
 
-from logiswitch import bundle, cli
+from logiswitch import bundle, cli, doctor
 
 
 @pytest.fixture
@@ -32,7 +32,7 @@ def sandbox(monkeypatch, tmp_path):
     monkeypatch.setattr(bundle, "state_path", lambda: state)
     monkeypatch.setattr(bundle, "doctor_report_path", lambda: logs / "absent-doctor.txt")
     monkeypatch.setattr(bundle, "_service_definition", lambda: ("service/def.plist", "<plist/>"))
-    monkeypatch.setattr(cli, "doctor_report", lambda target=None: ("THE DIAGNOSIS", []))
+    monkeypatch.setattr(doctor, "doctor_report", lambda target=None: ("THE DIAGNOSIS", []))
     return tmp_path
 
 
@@ -82,7 +82,7 @@ def test_a_failing_doctor_does_not_lose_the_logs(sandbox, monkeypatch):
     def explode(target=None):
         raise RuntimeError("no receiver attached")
 
-    monkeypatch.setattr(cli, "doctor_report", explode)
+    monkeypatch.setattr(doctor, "doctor_report", explode)
     files = contents(bundle.build(sandbox / "out.zip"))
     assert "no receiver attached" in files["doctor.txt"]
     assert "current log" in files["logs/logiswitch.log"], "the logs still made it"
