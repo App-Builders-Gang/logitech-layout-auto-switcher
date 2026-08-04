@@ -52,6 +52,62 @@ No remapping. No Karabiner layer. No AutoHotkey script pretending keys are
 something else. The **keyboard itself** changes mode, exactly as if you had held
 the key combination.
 
+## Why Logi Options+ can't fix this on a KVM
+
+Options+ *does* drive this feature. So why is the layout still wrong after every
+switch, even with Options+ installed on both machines?
+
+Because of **when** it acts. Reverse-engineered on macOS 2.6.941708 — decompiled,
+then instrumented while running:
+
+> **Logi Options+ writes the layout once, when its agent registers the device —
+> about seven seconds after start — and never again.**
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/optionsplus-dark.svg">
+  <img alt="Two eighteen-second timelines over the same four KVM switches. With only Logi Options+ installed, one setHostPlatform write happens when its agent starts; from the first KVM switch onwards the strip stays red for the rest of the run, because Options+ only acts at start-up and a KVM switch starts nothing. With logiswitch running, each switch turns the strip red for 1.1 seconds and then green again." src="assets/optionsplus-light.svg" width="900">
+</picture>
+
+Three measurements, all reproducible:
+
+| What was done | What Options+ did |
+|---|---|
+| Forced the platform wrong under a **running** Options+, 35 s | nothing |
+| Same, with its **window open**, 45 s | nothing |
+| Forced it wrong, then **restarted its agent** | corrected in ~7 s, every time |
+
+**A KVM switch restarts nothing.** It moves the receiver to the other machine and
+that machine's Options+ has been running for hours — so nothing re-asserts, and the
+keyboard keeps whatever layout the last computer left it in. That gap is the whole
+reason this project exists: it fires on device *arrival*, the event Options+ ignores,
+and writes the same value Options+ would want, so the two agree rather than fight.
+
+Two details worth knowing, because they are not what the UI implies: the setting
+**"Always keep the keyboard in Mac layout"** does not drive any of this, and Options+
+addresses a **concrete Easy-Switch host index rather than `0xFF`** — the same
+conclusion this project reached the hard way. Captured frames, symbols and method:
+**[docs/PROTOCOL.md](docs/PROTOCOL.md)**.
+
+## How it compares
+
+| | Logi Options+ | Karabiner-Elements | Solaar | **This** |
+|---|---|---|---|---|
+| Switches the keyboard's real layout | yes | no — remaps keys | yes | **yes** |
+| Reacts to a KVM / host change | **no** | n/a | manual | **yes, automatically** |
+| Windows | yes | no | no | **yes** |
+| macOS | yes | yes | no | **yes** |
+| Linux | no | no | yes | not yet |
+| Runs headless, no account | no | yes | yes | **yes** |
+| Idle CPU | background service | event tap | daemon | **~45 ms / 60 s measured** |
+
+The "reacts to a KVM" row is measured, not assumed: Options+ writes the platform
+once when its agent registers the device and not again, so a KVM switch — which
+restarts nothing — leaves it silent. Method and captured frames in
+**[docs/PROTOCOL.md](docs/PROTOCOL.md)**.
+
+Solaar is excellent and covers Linux thoroughly — this exists because it is
+Linux-only, and the problem lives on Windows and macOS.
+
 ## Install
 
 One line per machine. Install on **both** — each asserts only its own OS, so they
@@ -233,62 +289,6 @@ looks like a hardware fault and is not one; `doctor` detects that case and says 
 Protocol references, and the two hard-won workarounds this project inherited from
 Solaar, are in **[docs/RESOURCES.md](docs/RESOURCES.md)**.
 
-## Why Logi Options+ can't fix this on a KVM
-
-Options+ *does* drive this feature. So why is the layout still wrong after every
-switch, even with Options+ installed on both machines?
-
-Because of **when** it acts. Reverse-engineered on macOS 2.6.941708 — decompiled,
-then instrumented while running:
-
-> **Logi Options+ writes the layout once, when its agent registers the device —
-> about seven seconds after start — and never again.**
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/optionsplus-dark.svg">
-  <img alt="Two eighteen-second timelines over the same four KVM switches. With only Logi Options+ installed, one setHostPlatform write happens when its agent starts; from the first KVM switch onwards the strip stays red for the rest of the run, because Options+ only acts at start-up and a KVM switch starts nothing. With logiswitch running, each switch turns the strip red for 1.1 seconds and then green again." src="assets/optionsplus-light.svg" width="900">
-</picture>
-
-Three measurements, all reproducible:
-
-| What was done | What Options+ did |
-|---|---|
-| Forced the platform wrong under a **running** Options+, 35 s | nothing |
-| Same, with its **window open**, 45 s | nothing |
-| Forced it wrong, then **restarted its agent** | corrected in ~7 s, every time |
-
-**A KVM switch restarts nothing.** It moves the receiver to the other machine and
-that machine's Options+ has been running for hours — so nothing re-asserts, and the
-keyboard keeps whatever layout the last computer left it in. That gap is the whole
-reason this project exists: it fires on device *arrival*, the event Options+ ignores,
-and writes the same value Options+ would want, so the two agree rather than fight.
-
-Two details worth knowing, because they are not what the UI implies: the setting
-**"Always keep the keyboard in Mac layout"** does not drive any of this, and Options+
-addresses a **concrete Easy-Switch host index rather than `0xFF`** — the same
-conclusion this project reached the hard way. Captured frames, symbols and method:
-**[docs/PROTOCOL.md](docs/PROTOCOL.md)**.
-
-## How it compares
-
-| | Logi Options+ | Karabiner-Elements | Solaar | **This** |
-|---|---|---|---|---|
-| Switches the keyboard's real layout | yes | no — remaps keys | yes | **yes** |
-| Reacts to a KVM / host change | **no** | n/a | manual | **yes, automatically** |
-| Windows | yes | no | no | **yes** |
-| macOS | yes | yes | no | **yes** |
-| Linux | no | no | yes | not yet |
-| Runs headless, no account | no | yes | yes | **yes** |
-| Idle CPU | background service | event tap | daemon | **~45 ms / 60 s measured** |
-
-The "reacts to a KVM" row is measured, not assumed: Options+ writes the platform
-once when its agent registers the device and not again, so a KVM switch — which
-restarts nothing — leaves it silent. Method and captured frames in
-**[docs/PROTOCOL.md](docs/PROTOCOL.md)**.
-
-Solaar is excellent and covers Linux thoroughly — this exists because it is
-Linux-only, and the problem lives on Windows and macOS.
-
 ## Supported devices
 
 **Whatever your hardware says it supports.** There is no model allow-list to fall
@@ -354,38 +354,17 @@ No, on either platform. HID++ access does not require elevation.
 No — and it coexists with it. See above for the one case where they conflict.
 
 **Will it fight with Options+?**
-Not while you point both at the same OS, which is the normal case. Measured on a Mac
-running Options+ 2.6 alongside the agent: over twenty minutes, 5,952 frames from
-Options+ against 349 from us — every one of them a root ping across the receiver's
-device slots. Across every log on that machine it never once set the host platform.
-It only writes to revert a change it disagrees with, so agreeing costs nothing.
-
-Point them at different platforms on the same machine and they do fight — but not
-continuously. Reverse-engineering the macOS agent (2.6.941708) and instrumenting it
-at runtime shows Options+ re-asserts the OS layout **once, about seven seconds after
-its own agent starts**, and not again: forcing the keyboard to the wrong platform
-under a running Options+ produced no reaction at all, for 45 seconds, even with its
-window open. Restart it with the platform wrong and it corrects it immediately.
-
-Two things worth knowing, both counter to what its UI implies:
-
-- The option **"Always keep the keyboard in Mac layout"** (`keepKeyboardInOsLayout`)
-  does not drive this. Its only consumer, `feature_4531_multi_platform`, is never
-  constructed in this build — hooks on its constructor never fired once. The write
-  comes from `feature_1815_hosts_infos`, which re-asserts an OS-derived platform and
-  never reads that setting.
-- Options+ addresses a **concrete Easy-Switch host index, not `0xFF`** — the same
-  conclusion this project reached the hard way.
-
-Full write-up with the captured frames: **[docs/PROTOCOL.md](docs/PROTOCOL.md)**.
+Not while both target the same OS, which is the normal case — measured over twenty
+minutes on a Mac running both, Options+ sent 5,952 frames and not one of them set
+the platform. Point them at different platforms and they do disagree; see
+[above](#why-logi-options-cant-fix-this-on-a-kvm).
 
 One thing does change while Options+ is running: this machine stops taking turns
-with other machines over a shared keyboard. The protocol reports both a peer machine
-and a local program as simply "host software", and yielding to a program nobody is
-typing on would leave the layout wrong for whoever types next. `logiswitch doctor`
-says so under `sharing`. If you share the keyboard over a KVM and want turn-taking
-back, quit Options+ or run the agent with `--observe` on the machine that should
-yield.
+with other machines over a shared keyboard, because the protocol reports a peer
+machine and a local program identically, and yielding to a program nobody is typing
+on would leave the layout wrong for whoever types next. `logiswitch doctor` says so
+under `sharing`. To get turn-taking back, quit Options+ or run the agent with
+`--observe` on the machine that should yield.
 
 **My KVM only switches video, not USB.**
 Then nothing disconnects and there is no arrival event — the same situation as an
