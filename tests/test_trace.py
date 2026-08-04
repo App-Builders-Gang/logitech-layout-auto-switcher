@@ -71,7 +71,14 @@ def test_a_windowed_rate_is_not_reset_by_success():
 def test_a_windowed_rate_forgets_what_is_out_of_window():
     trace.HEALTH.mark("reconnects")
     assert trace.HEALTH.churn(window=60.0) == 1
-    assert trace.HEALTH.churn(window=0.0) == 0
+
+    # A zero-length window asks whether the stamp is strictly before *now*, which
+    # only clock resolution can answer: Windows' monotonic clock advances about
+    # every 15 ms, so the stamp and the cutoff land on the same tick and the event
+    # is still "inside" a window of zero. Sleep clear of the tick and ask a real
+    # question instead -- the behaviour under test is the expiry, not the clock.
+    time.sleep(0.05)
+    assert trace.HEALTH.churn(window=0.01) == 0
 
 
 def test_rate_of_an_unseen_event_is_zero():
