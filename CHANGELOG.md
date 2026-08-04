@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.2.1 — 2026-08-04
+
+### Fixed
+
+- **Another program's traffic was reported as the device answering late.** On a
+  machine running Logi Options+ the agent logged 215 orphan replies against 212
+  requests, warning that the device was missing the 1.2 s deadline. It was not: the
+  frames carried software id `0x0B`, which this project never issues, and 151 of
+  them were `HOSTS_INFO.getHostInfo`, a function it does not call. A shared HID
+  collection delivers another program's replies to us as well. They are now counted
+  and reported at INFO as what they are.
+
 ## 2.2.0 — 2026-08-04
 
 Taking turns between machines did not actually engage. Everything needed to
