@@ -1214,9 +1214,10 @@ def arbitration(p: dict) -> str:
 # The one asset in this file whose subject is another program, so it is the one that
 # has to be scrupulous. Every number below came off a real machine:
 #
-#   Logi Options+ 2.6.941708 on macOS, decompiled and then instrumented with Frida.
-#   Its enforcement is edge-triggered on device registration -- one setHostPlatform
-#   about seven seconds after its own agent starts -- and never fires again. Forcing
+#   Logi Options+ 2.6.941708 on macOS, timed from the outside: set the platform,
+#   stop our own agent so nothing else can correct it, then watch the clock.
+#   Its correction is edge-triggered on start-up -- about seven seconds after its
+#   own agent starts -- and never happens again. Setting
 #   the keyboard to the wrong platform underneath a running Options+ produced no
 #   reaction for 45 s, with its window open and with it closed. Restarting its agent
 #   corrected the platform every time.
@@ -1291,8 +1292,8 @@ def optionsplus(p: dict) -> str:
             48,
             84,
             "A KVM switch does not restart anything, so nothing re-asserts. "
-            "Measured on Options+ 2.6.941708 for macOS: decompiled, then instrumented "
-            "while running.",
+            "Measured on Options+ 2.6.941708 for macOS, with its own "
+            "“always keep the keyboard in Mac layout” switched on throughout.",
             fill=p["muted"],
             size=14.5,
         ),
@@ -1425,7 +1426,8 @@ def optionsplus(p: dict) -> str:
             "rest of the run, because Options+ only acts at start-up and a KVM switch starts "
             "nothing. On the second, with logiswitch running, each switch turns the strip red "
             "for 1.1 seconds and then green again. Measured on Logi Options+ 2.6.941708 for "
-            "macOS by decompiling its agent and instrumenting the running process."
+            "macOS, with its own setting to always keep the keyboard in Mac layout switched "
+            "on throughout."
         ),
         css="".join(css),
     )
