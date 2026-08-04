@@ -1,5 +1,36 @@
 # Changelog
 
+## 2.4.0 — 2026-08-04
+
+Windows toasts without spawning PowerShell. Every notification used to launch a
+hidden `powershell.exe` to run a static script — a whole process per toast, which
+on a keyboard that keeps reverting is a process every few minutes, and is exactly
+the "a shell keeps appearing" symptom that prompted this. The same WinRT calls
+PowerShell was making are now made directly, in process, through `ctypes`: no
+child process, no command line for a device name to travel down, and no script for
+a parser to reject.
+
+### Changed
+
+- **Windows notifications no longer spawn a process.** `notify._send_windows`
+  calls the `Windows.UI.Notifications` COM API itself, through the new `_wintoast`
+  module, instead of handing a script to `powershell -Command`. The title and body
+  are escaped into toast XML on the Python side, so the untrusted-device-name
+  guarantee the old environment-variable channel gave is kept — and the failure
+  mode that shipped 2.3.0's notifications broken (PowerShell refusing a type
+  literal split across lines) is structurally impossible, because there is no
+  PowerShell left to parse anything.
+
+  Every interface GUID and vtable offset is copied from the Windows SDK IDL, not
+  from memory: a one-digit typo in a GUID makes `RoGetActivationFactory` return
+  `E_NOINTERFACE` and the toast fails silently — the same "passes in tests, dead
+  in production" shape as the PowerShell bug — so the source of truth is the IDL
+  the SDK installs. COM is initialised per thread, because `RoInitialize` is per
+  thread and the agent delivers notifications from a thread of its own.
+
+- `logiswitch doctor` and `notify-test` now report the Windows backend as "Windows
+  toast (native)".
+
 ## 2.3.0 — 2026-08-04
 
 Running alongside Logi Options+, correctly. Measured on macOS with Options+

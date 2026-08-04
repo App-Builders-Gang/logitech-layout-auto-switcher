@@ -138,29 +138,45 @@ def test_macos_passes_the_text_as_arguments_never_as_script():
     assert "--" in command, "a body starting with a hyphen must not read as an option"
 
 
-def test_windows_passes_the_text_in_the_environment(monkeypatch):
-    monkeypatch.setattr(notify, "is_macos", lambda: False)
-    monkeypatch.setattr(notify, "is_windows", lambda: True)
+def test_windows_passes_the_text_to_the_native_toast(monkeypatch):
+    """The body still reaches the OS verbatim, now through the in-process COM call."""
+    from logiswitch import _wintoast
+
     captured = {}
 
-    def fake_run(command, **kwargs):
-        captured["command"] = command
-        captured["env"] = kwargs.get("env", {})
+    def fake_show(title, body):
+        captured["title"] = title
+        captured["body"] = body
 
-    monkeypatch.setattr(notify.subprocess, "run", fake_run)
+    monkeypatch.setattr(_wintoast, "show_toast", fake_show)
     notify._send_windows(notify.Notification(notify.SWITCHED, HOSTILE))
 
-    assert captured["env"][notify.TOAST_BODY_ENV] == HOSTILE
-    assert not any(HOSTILE in part for part in captured["command"]), (
-        "the text must not appear in the command line at all"
-    )
+    assert captured["title"] == "logiswitch"
+    assert captured["body"] == HOSTILE
 
 
-def test_the_windows_toast_carries_an_application_id():
+def test_windows_toast_escapes_untrusted_text_into_xml():
+    """A device name is untrusted input; it must become toast text, not markup.
+
+    There is no command line any more, so the old worry -- the body reaching a
+    shell -- is gone. The new one is the same shape: the body must not become XML
+    structure. ``_toast_xml`` escapes it, and the result must still parse.
+    """
+    from xml.etree import ElementTree
+
+    from logiswitch import _wintoast
+
+    payload = _wintoast._toast_xml("logiswitch", HOSTILE)
+    ElementTree.fromstring(payload)  # ill-formed XML would raise here
+    assert HOSTILE not in payload, "the raw body must not survive unescaped"
+    assert "&amp;" in payload, "the ampersands in HOSTILE are escaped"
+
+
+def test_windows_toast_carries_an_application_id():
     """A toast with no AUMID does not display, and does not say why."""
-    command = " ".join(notify.windows_command())
-    assert notify.POWERSHELL_AUMID in command
-    assert "-NoProfile" in command and "-NonInteractive" in command
+    from logiswitch import _wintoast
+
+    assert _wintoast._APP_USER_MODEL_ID, "a registered AUMID must be set"
 
 
 # -- lifecycle ----------------------------------------------------------------
@@ -195,62 +211,19 @@ def test_a_disabled_notifier_starts_no_thread(recorder):
     notifier.stop()
 
 
-# -- the script has to be valid PowerShell, not merely contain the right words ---
+# -- the COM wiring has to actually work, not merely look right ----------------
 
 
-def test_the_script_uses_no_line_continuations():
-    """A backtick continuation inside a type literal is a parse error.
+@pytest.mark.skipif(not notify.is_windows(), reason="needs a real Windows toast runtime")
+def test_windows_can_actually_raise_a_toast():
+    """The check that would have caught the PowerShell bug: do it for real.
 
-    This shipped broken: the script wrapped `[Windows.UI.Notifications...]` across
-    two lines for readability, PowerShell rejected it with "Missing ] at end of
-    attribute or type literal", and every toast on every Windows machine failed --
-    while these tests, which only checked the text was present, passed.
+    The previous version shipped broken because its tests only inspected the
+    script's text. The native version is verified the same way the old one failed
+    in production: by asking the OS to raise a toast and letting any COM error
+    raise. Nothing is parsed or pattern-matched -- the COM chain either succeeds
+    or it does not.
     """
-    for number, line in enumerate(notify._POWERSHELL_SCRIPT.splitlines(), 1):
-        assert not line.rstrip().endswith("`"), f"line {number} continues a statement"
-
-
-def test_every_bracketed_type_literal_is_closed_on_its_own_line():
-    for number, line in enumerate(notify._POWERSHELL_SCRIPT.splitlines(), 1):
-        assert line.count("[") == line.count("]"), (
-            f"line {number} splits a type literal across lines: {line!r}"
-        )
-
-
-@pytest.mark.skipif(not notify.is_windows(), reason="needs a real PowerShell")
-def test_powershell_can_actually_parse_the_script():
-    """The check that would have caught it: ask PowerShell, do not guess.
-
-    Both out-parameters are declared before being passed. ``[ref]`` binds a *variable
-    path*, so handing it a name that does not exist yet fails with
-    ``NonExistingVariableReference`` -- and that failure looks exactly like the script
-    being rejected. The first version of this test did that, so it failed on every
-    Windows run for a reason that had nothing to do with the script it was checking:
-    a test written to stop guessing about PowerShell, which guessed about PowerShell.
-    """
-    import os
-    import subprocess
-
-    completed = subprocess.run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "$ErrorActionPreference='Stop';"
-            "$tokens=$null; $errors=$null;"
-            "[void][System.Management.Automation.Language.Parser]::ParseInput("
-            "$env:LOGISWITCH_SCRIPT, [ref]$tokens, [ref]$errors);"
-            "if ($errors) { $errors | ForEach-Object { $_.Message }; exit 1 }",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        env={**os.environ, "LOGISWITCH_SCRIPT": notify._POWERSHELL_SCRIPT},
-    )
-    # Parse errors are printed to stdout by the loop above, but anything that stops
-    # the harness itself lands on stderr -- and reporting only stdout is why the
-    # original failure arrived as a blank message.
-    assert completed.returncode == 0, (
-        f"PowerShell rejected the script.\nstdout: {completed.stdout}\nstderr: {completed.stderr}"
+    notify._send_windows(
+        notify.Notification(notify.SWITCHED, "logiswitch self-test toast", "logiswitch")
     )
