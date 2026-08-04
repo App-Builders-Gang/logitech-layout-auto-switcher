@@ -1103,10 +1103,17 @@ def arbitration(p: dict) -> str:
         ),
     ]
 
-    #: (x, icon, name, platform written, bar class, owner class, yielder class)
+    #: (x, icon, name, platform written, bar class, owner class, yielder class,
+    #: resting opacity of the owner caption, resting opacity of the yielder caption)
+    #:
+    #: The two resting values are the state at the *end* of the loop, which is what a
+    #: still render and `prefers-reduced-motion` both show. By then typing has moved
+    #: to the PC: barMac ends full-width and grey, barPC ends short and green. Having
+    #: the Mac's caption rest on "typing now" therefore contradicted its own idle bar
+    #: in every still frame of this diagram.
     cards = [
-        (48, APPLE_PATH, "Mac", "platform 1", "bMac", "ownMac", "yieldMac", 1, 0),
-        (456, WINDOWS_PATH, "Windows PC", "platform 0", "bPC", "ownPC", "yieldPC", 0, 1),
+        (48, APPLE_PATH, "Mac", "platform 1", "bMac", "ownMac", "yieldMac", 0, 1),
+        (456, WINDOWS_PATH, "Windows PC", "platform 0", "bPC", "ownPC", "yieldPC", 1, 0),
         (864, WINDOWS_PATH, "Windows laptop", "platform 0", None, None, None, 0, 1),
     ]
     for x, icon, name, plat, bar, own, yields, own_end, yield_end in cards:
