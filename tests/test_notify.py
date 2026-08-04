@@ -193,3 +193,49 @@ def test_a_disabled_notifier_starts_no_thread(recorder):
     notifier.start()
     assert not _notifier_threads()
     notifier.stop()
+
+
+# -- the script has to be valid PowerShell, not merely contain the right words ---
+
+
+def test_the_script_uses_no_line_continuations():
+    """A backtick continuation inside a type literal is a parse error.
+
+    This shipped broken: the script wrapped `[Windows.UI.Notifications...]` across
+    two lines for readability, PowerShell rejected it with "Missing ] at end of
+    attribute or type literal", and every toast on every Windows machine failed --
+    while these tests, which only checked the text was present, passed.
+    """
+    for number, line in enumerate(notify._POWERSHELL_SCRIPT.splitlines(), 1):
+        assert not line.rstrip().endswith("`"), f"line {number} continues a statement"
+
+
+def test_every_bracketed_type_literal_is_closed_on_its_own_line():
+    for number, line in enumerate(notify._POWERSHELL_SCRIPT.splitlines(), 1):
+        assert line.count("[") == line.count("]"), (
+            f"line {number} splits a type literal across lines: {line!r}"
+        )
+
+
+@pytest.mark.skipif(not notify.is_windows(), reason="needs a real PowerShell")
+def test_powershell_can_actually_parse_the_script():
+    """The check that would have caught it: ask PowerShell, do not guess."""
+    import subprocess
+
+    completed = subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$ErrorActionPreference='Stop';"
+            "[void][System.Management.Automation.Language.Parser]::ParseInput("
+            "$env:LOGISWITCH_SCRIPT, [ref]$null, [ref]$errors);"
+            "if ($errors) { $errors | ForEach-Object { $_.Message }; exit 1 }",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env={**__import__("os").environ, "LOGISWITCH_SCRIPT": notify._POWERSHELL_SCRIPT},
+    )
+    assert completed.returncode == 0, f"PowerShell rejected the script: {completed.stdout}"

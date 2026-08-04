@@ -71,18 +71,26 @@ TOAST_BODY_ENV = "LOGISWITCH_TOAST_BODY"
 
 #: Constant script: the text arrives in the environment, so there is no quoting and
 #: nothing a device name could inject.
-_POWERSHELL_SCRIPT = f"""
-[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, `
- ContentType=WindowsRuntime] | Out-Null
-$xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent(
-    [Windows.UI.Notifications.ToastTemplateType]::ToastText02)
-$text = $xml.GetElementsByTagName('text')
-$text.Item(0).AppendChild($xml.CreateTextNode($env:{TOAST_TITLE_ENV})) | Out-Null
-$text.Item(1).AppendChild($xml.CreateTextNode($env:{TOAST_BODY_ENV})) | Out-Null
-$toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
-[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier(
-    '{POWERSHELL_AUMID}').Show($toast)
-""".strip()
+#:
+#: Assembled by concatenation rather than as a triple-quoted block, so the Python
+#: source can stay narrow while every emitted statement remains on **one physical
+#: line**. PowerShell will not continue a type literal across lines -- a backtick
+#: inside ``[Windows.UI.Notifications...]`` is a parse error, "Missing ] at end of
+#: attribute or type literal" -- and wrapping it for readability is exactly how this
+#: shipped broken: the command failed on every Windows machine while the unit tests,
+#: which only ever checked the text was present, passed.
+_POWERSHELL_SCRIPT = (
+    "[Windows.UI.Notifications.ToastNotificationManager,"
+    " Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null\n"
+    "$xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent("
+    "[Windows.UI.Notifications.ToastTemplateType]::ToastText02)\n"
+    "$text = $xml.GetElementsByTagName('text')\n"
+    f"$text.Item(0).AppendChild($xml.CreateTextNode($env:{TOAST_TITLE_ENV})) | Out-Null\n"
+    f"$text.Item(1).AppendChild($xml.CreateTextNode($env:{TOAST_BODY_ENV})) | Out-Null\n"
+    "$toast = [Windows.UI.Notifications.ToastNotification]::new($xml)\n"
+    "[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("
+    f"'{POWERSHELL_AUMID}').Show($toast)\n"
+)
 
 #: Constant AppleScript reading its text from ``argv``. Passing the message as an
 #: argument rather than interpolating it into the script is what makes a device

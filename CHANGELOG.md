@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.2.2 — 2026-08-04
+
+### Fixed
+
+- **Desktop notifications never worked on Windows.** The PowerShell script wrapped
+  `[Windows.UI.Notifications.ToastNotificationManager, ...]` across two lines with a
+  backtick, for no reason beyond keeping the Python source narrow. PowerShell will
+  not continue a type literal: it answered "Missing ] at end of attribute or type
+  literal" and every toast failed, on every Windows machine, since notifications
+  shipped. `logiswitch notify-test` reported the failure correctly, which is how it
+  was found.
+
+  The script is now assembled so every emitted statement is on one physical line,
+  and the tests check that rather than merely checking the text is present -- on
+  Windows they hand the script to PowerShell's own parser instead of guessing.
+
 ## 2.2.1 — 2026-08-04
 
 ### Fixed
