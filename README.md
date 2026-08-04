@@ -357,8 +357,23 @@ No, on either platform. HID++ access does not require elevation.
 No — and it coexists with it. See above for the one case where they conflict.
 
 **Will it fight with Options+?**
-Only if they target different platforms on the same machine. Then Options+ wins,
-and the log tells you so after three reverts.
+Not while you point both at the same OS, which is the normal case. Measured on a Mac
+running Options+ 2.6 alongside the agent: over twenty minutes, 5,952 frames from
+Options+ against 349 from us — every one of them a root ping across the receiver's
+device slots. Across every log on that machine it never once set the host platform.
+It only writes to revert a change it disagrees with, so agreeing costs nothing.
+
+Point them at different platforms on the same machine and they do fight — Options+
+reverts within half a second, the agent corrects back, and the log says so. Fix it
+by agreeing, not by picking a winner.
+
+One thing does change while Options+ is running: this machine stops taking turns
+with other machines over a shared keyboard. The protocol reports both a peer machine
+and a local program as simply "host software", and yielding to a program nobody is
+typing on would leave the layout wrong for whoever types next. `logiswitch doctor`
+says so under `sharing`. If you share the keyboard over a KVM and want turn-taking
+back, quit Options+ or run the agent with `--observe` on the machine that should
+yield.
 
 **My KVM only switches video, not USB.**
 Then nothing disconnects and there is no arrival event — the same situation as an

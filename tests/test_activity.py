@@ -201,6 +201,80 @@ def test_the_change_of_turn_is_logged_once_each_way(receiver, tmp_path, caplog):
         assert caplog.text.count("taking the keyboard back") == 1
 
 
+# -- a rival on *this* machine is not a peer -----------------------------------
+
+
+def running_here(monkeypatch, *names):
+    """Pretend `names` are running locally, overriding the no-rivals default."""
+    monkeypatch.setattr(agent_module.diagnostics, "competing_software", lambda *a, **k: list(names))
+
+
+def test_an_idle_machine_does_not_yield_to_local_software(receiver, tmp_path, monkeypatch, caplog):
+    """Standing down is a bargain between machines. Options+ is not a machine.
+
+    Both peer detectors conclude "another machine" from evidence a local program
+    satisfies equally well -- a platform set by "host software" says only that. If
+    that were allowed to make us yield, an idle Mac running Logi Options+ would stop
+    correcting the layout and stay stopped until somebody typed, which is precisely
+    when it needs to already be right.
+    """
+    agent = make_agent(tmp_path, idle=120.0, monkeypatch=monkeypatch)
+    running_here(monkeypatch, "logioptionsplus_agent")
+    saw_peer(agent)
+    with caplog.at_level("INFO", logger="logiswitch.agent"):
+        assert not agent._standing_down()
+    assert "not standing down" in caplog.text
+    assert "logioptionsplus_agent" in caplog.text
+
+
+def test_the_same_evidence_still_yields_when_nothing_runs_here(receiver, tmp_path, monkeypatch):
+    """The counterpart, so the gate cannot quietly disable turn-taking outright."""
+    agent = make_agent(tmp_path, idle=120.0, monkeypatch=monkeypatch)
+    saw_peer(agent)
+    assert agent._standing_down(), "no local rival, so the peer really is another machine"
+
+
+def test_a_foreign_write_is_not_blamed_on_another_machine_when_one_runs_here(
+    receiver, tmp_path, monkeypatch, caplog
+):
+    agent = make_agent(tmp_path, idle=0.0, monkeypatch=monkeypatch)
+    running_here(monkeypatch, "logioptionsplus_agent")
+    with caplog.at_level("WARNING", logger="logiswitch.agent"):
+        saw_peer(agent)
+    assert "software that is not us" in caplog.text
+    assert "another machine is setting" not in caplog.text, "do not assert what is unproven"
+
+
+def test_local_software_does_not_ease_off_the_fast_recheck(receiver, tmp_path, monkeypatch):
+    """Backing off is right against a machine and backwards against a reverting device.
+
+    Close re-checking exists for firmware that drops the setting every few seconds.
+    Standing it down on evidence Options+ produces would leave such a keyboard wrong
+    for up to a whole heartbeat.
+    """
+    agent = Agent(config(tmp_path))
+    agent._clean_checks = 0
+    running_here(monkeypatch, "logioptionsplus_agent")
+    saw_peer(agent)
+    assert agent._unsettled(), "keep watching closely: this may just be a local rival"
+
+
+def test_the_process_list_is_not_consulted_per_pass(receiver, tmp_path, monkeypatch):
+    """Finding out costs a subprocess, so it must be cached."""
+    calls = []
+
+    def counted(*_a, **_k):
+        calls.append(1)
+        return []
+
+    monkeypatch.setattr(agent_module.diagnostics, "competing_software", counted)
+    agent = make_agent(tmp_path, idle=120.0, monkeypatch=monkeypatch)
+    saw_peer(agent)
+    for _ in range(50):
+        agent._standing_down()
+    assert len(calls) == 1, f"listed processes {len(calls)} times"
+
+
 def test_a_peer_stops_the_fast_recheck_escalating(receiver, tmp_path):
     """Racing a competitor at 2 Hz makes the tug-of-war faster, not winnable."""
     agent = Agent(config(tmp_path))

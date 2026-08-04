@@ -103,6 +103,25 @@ def machine_in_use(monkeypatch):
     monkeypatch.setattr(activity, "seconds_since_input", lambda: 0.0)
 
 
+@pytest.fixture(autouse=True)
+def no_local_rivals(monkeypatch):
+    """Pretend no Logitech software is installed here, unless a test says otherwise.
+
+    The agent refuses to hand the keyboard to another machine while a rival program
+    is running locally, and it finds out by listing processes. On the laptop this was
+    written on that call returns Logi Options+, so the arbitration tests would pass or
+    fail depending on whether the author happened to have it open -- the same trap
+    ``machine_in_use`` exists for. Tests about local rivals set their own answer.
+
+    Stubs the process lister rather than ``competing_software`` itself, so the tests
+    of that function -- which pass their own ``runner`` -- still exercise the real
+    parsing.
+    """
+    from logiswitch import diagnostics
+
+    monkeypatch.setattr(diagnostics, "_run", lambda _command: "")
+
+
 @pytest.fixture
 def receiver(monkeypatch):
     """A Bolt receiver with an MX Master 3S and an MX Keys S, as on real hardware."""

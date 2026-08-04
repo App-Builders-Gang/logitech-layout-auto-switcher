@@ -1,5 +1,56 @@
 # Changelog
 
+## 2.3.0 — 2026-08-04
+
+Running alongside Logi Options+, correctly. Measured on macOS with Options+
+2.6.941708 and the agent side by side: **5,952 frames from Options+ against 349
+from us**, every one of them a root ping across the receiver's device slots, and
+**not a single host-platform write** in any log on the machine. It polls; it does
+not compete for the setting. Three things were wrong on our side.
+
+### Fixed
+
+- **Another program's traffic was still blamed on the receiver.** 2.2.1 tried to fix
+  this by asking whether a frame carried a software id we never issue -- but Options+
+  walks the same 1–15 range this project rotates through, so that test could only
+  ever catch Solaar's reserved `0x0B`. Against Options+ it was unreachable code, and
+  844 warnings in seventeen minutes announced that the receiver was missing its 1.2 s
+  deadline on a completely healthy machine.
+
+  A reply is now ours if and only if it answers a request we recorded sending. That
+  is exact, needs no guessing about anyone's software id, and keeps a genuine
+  straggler reported as one. The tests replay the real captured traffic.
+
+- **The agent would have handed the keyboard to a program on its own computer.** It
+  stops writing when a peer is present and this machine has been idle -- the right
+  bargain between two machines sharing a keyboard over a KVM. But both peer detectors
+  conclude "another machine" from evidence a local rival satisfies equally well: a
+  platform set by "host software" says only that. An idle Mac running Options+ could
+  therefore stand down and stay down until somebody typed, which is exactly when the
+  layout needs to already be right. Nobody is typing on Options+.
+
+  Turn-taking is now suspended while Logitech software is running locally, and
+  `doctor` says so under `sharing`. Behaviour with none running is unchanged.
+
+- **Close re-checking eased off on the same bad evidence**, which is backwards: it
+  exists for firmware that drops the setting every few seconds.
+
+### Added
+
+- Software ids are now chosen away from those another program is currently using.
+  Nothing reserves them, and today only the *feature* differs between our traffic and
+  Options+'s -- luck, not design.
+- A short wait for quiet before transmitting into another program's burst, and a
+  `receiver_busy` counter for the receiver's own "resource error" replies (2,381 of
+  them in the measured window).
+
+### Changed
+
+- The claim that Options+ "wins" a conflict is gone from the README and
+  `docs/PROTOCOL.md`. It was never measured. What is documented instead is what the
+  traces show, and how to avoid the conflict: point both at the same OS.
+- `doctor` no longer prints a bare "open failed" above the report that explains it.
+
 ## 2.2.2 — 2026-08-04
 
 ### Fixed

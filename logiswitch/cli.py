@@ -59,8 +59,13 @@ def _endpoints(
             try:
                 transport = hidpp.open_transport(group)
             except Exception as exc:
-                print(f"cannot open {group}: {exc}", file=sys.stderr)
-                if refused is not None:
+                if refused is None:
+                    # Nobody is collecting these, so say it here or not at all.
+                    # When somebody is -- `doctor` -- it reports the same endpoint
+                    # properly and explains why, and a bare "open failed" printed
+                    # above its own report just reads as an unexplained error.
+                    print(f"cannot open {group}: {exc}", file=sys.stderr)
+                else:
                     refused.append(f"{group.label}: {exc}")
                 continue
             transports.append(transport)
@@ -286,12 +291,31 @@ def doctor_report(target_os: str | None = None) -> tuple[str, list[str]]:
     )
     rivals = host["competing_software"]
     if rivals:
-        findings.append(
+        out.append(
+            f"  taking turns : SUSPENDED while {', '.join(rivals)} "
+            f"{'is' if len(rivals) == 1 else 'are'} running here"
+        )
+        finding = (
             f"{', '.join(rivals)} {'is' if len(rivals) == 1 else 'are'} running and "
-            "drive the same HID++ collection. That software can set its own host "
-            "platform, so it is a candidate for a layout that will not stay put -- but "
-            "confirm it before blaming it: quit it, watch the log for five minutes, and "
-            "see whether the corrections actually stop."
+            "share this HID++ collection. Expected company rather than a fault, and "
+            "their traffic is counted separately as 'other software' rather than "
+            "blamed on the receiver."
+        )
+        if any("logio" in name.lower() for name in rivals):
+            finding += (
+                " Logi Options+ specifically was measured doing nothing but polling "
+                "the receiver's device slots -- hours of traces, not one host platform "
+                "write. It only writes to revert a change it disagrees with, so point "
+                "it at the same OS and the two never collide."
+            )
+        findings.append(
+            finding + "\n"
+            "  One consequence: this machine will not hand the keyboard to another "
+            "machine while that software is running, because the protocol reports both "
+            "as simply 'host software' and yielding to a program nobody is typing on "
+            "would leave the layout wrong. If you do share this keyboard over a KVM and "
+            "want turn-taking back, quit it -- or run the agent with --observe on "
+            "whichever machine should yield."
         )
 
     # -- devices --------------------------------------------------------------

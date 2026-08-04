@@ -48,6 +48,26 @@ FIXED_SWID_ENV = "LOGISWITCH_FIXED_SWID"
 #: How long a request that gave up is remembered, so its answer can still be
 #: recognised as belonging to it when it eventually turns up.
 ABANDONED_MEMORY = 3.0
+#: How long every request we send is remembered, purely so a reply can be told
+#: apart from another program's. Comfortably longer than ``ABANDONED_MEMORY``,
+#: because this answers a different question: not "may this reply still be
+#: delivered?" but "could we conceivably have asked for it?"
+RECENT_REQUEST_MEMORY = 60.0
+#: A frame from another program this recently means its burst is still in flight.
+#: Logi Options+ sweeps every device slot in about 140 ms, and the receiver answers
+#: the tail of that sweep with "resource error" -- it is out of room. Transmitting
+#: into that is how our request becomes one of the ones it refuses.
+FOREIGN_BURST_WINDOW = 0.15
+#: Ceiling on waiting for quiet. A busy receiver must never stop us writing, so
+#: this is a courtesy with a hard limit, not a condition to be satisfied.
+MAX_QUIET_WAIT = 0.3
+#: Polling gap while waiting for quiet.
+QUIET_POLL = 0.02
+#: A software id another program used this recently is worth stepping around.
+#: Only a couple are hot at any moment, so avoiding them is nearly free.
+FOREIGN_SWID_MEMORY = 2.0
+#: HID++ 1.0 "resource error": the receiver has no room for another transaction.
+ERROR_RESOURCE = 0x09
 
 
 class _ResponseSink:
@@ -138,14 +158,70 @@ class Transport:
         #: Requests that timed out, keyed exactly as their reply would arrive, with
         #: an expiry. See :meth:`_abandon`.
         self._abandoned: dict[tuple[int, int, int], float] = {}
+        #: Every request we have sent lately, keyed as its reply would arrive, with
+        #: an expiry. This is what tells our own traffic from somebody else's.
+        self._recent: dict[tuple[int, int, int], float] = {}
+        #: Software ids seen on frames that were not ours, and when.
+        self._foreign_sw_ids: dict[int, float] = {}
+        #: When a frame that was not ours last arrived.
+        self._last_foreign_frame = 0.0
 
     def _next_sw_id(self) -> int:
-        """Stamp the next request. Rotating is what makes a late reply detectable."""
+        """Stamp the next request. Rotating is what makes a late reply detectable.
+
+        Biased away from ids another program is using right now. Nothing reserves a
+        software id -- Logi Options+ walks the whole 1-15 range exactly as we do --
+        so a collision on the same device *and* feature would let its reply satisfy
+        our request. Today only the feature differs, which is luck rather than
+        design; stepping around whatever is currently hot costs a few comparisons
+        and removes most of the window.
+        """
         if self._fixed_sw_id:
             return p.SW_ID
         # itertools.cycle.__next__ is a single bytecode under the GIL, and requests
         # are serialised by _request_lock anyway, so no extra lock is warranted.
-        return next(self._sw_ids)
+        sw_id = next(self._sw_ids)
+        if not self._foreign_sw_ids:
+            return sw_id
+        now = time.monotonic()
+        # Bounded: give up after one full turn of the rotation and use what we have.
+        # Rotation still advances either way, so stragglers stay distinguishable.
+        for _ in range(len(p.SW_IDS) - 1):
+            if now - self._foreign_sw_ids.get(sw_id, 0.0) >= FOREIGN_SWID_MEMORY:
+                return sw_id
+            sw_id = next(self._sw_ids)
+        return sw_id
+
+    # -- telling our traffic from everyone else's -----------------------------
+
+    def _remember_request(self, device_index: int, feature_index: int, func_byte: int) -> None:
+        now = time.monotonic()
+        if len(self._recent) > len(p.SW_IDS) * 8:
+            self._recent = {key: due for key, due in self._recent.items() if due > now}
+        self._recent[(device_index, feature_index, func_byte)] = now + RECENT_REQUEST_MEMORY
+
+    def _was_ours(self, frame: bytes) -> bool:
+        """Could this frame be an answer to something we asked?
+
+        The exact question, answered from our own records rather than guessed at.
+        The alternative -- deciding by software id -- cannot work: the range is
+        shared, so the id another program stamped is one we use too.
+        """
+        key = self._reply_key(frame)
+        if key is None:
+            return False
+        due = self._recent.get(key)
+        return due is not None and due > time.monotonic()
+
+    def _await_quiet(self) -> None:
+        """Let another program's burst finish before adding to it."""
+        if not self._last_foreign_frame:
+            return
+        deadline = time.monotonic() + MAX_QUIET_WAIT
+        while time.monotonic() - self._last_foreign_frame < FOREIGN_BURST_WINDOW:
+            if time.monotonic() >= deadline or self._stop.is_set():
+                return
+            time.sleep(QUIET_POLL)
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -303,25 +379,31 @@ class Transport:
                 log.exception("notification callback raised")
 
     def _note_orphan(self, frame: bytes, summary: str) -> None:
-        """A reply nobody was waiting for.
+        """A reply nobody here was waiting for: either somebody else's, or a straggler.
 
-        Almost always a straggler: the request it answers gave up at its deadline
-        and the reply turned up afterwards. Harmless now that the software id is
-        rotated -- it can no longer be handed to whichever request came next -- but
-        worth counting and saying out loud, because it is the fingerprint of a
-        receiver answering slowly enough for that race to have been possible, and
-        it is the thing to look for in the trace next to a wrong-layout report.
+        Which of the two it is decides whether this is a fault. A straggler means
+        the request it answers gave up at its deadline and the reply turned up
+        afterwards -- harmless now that the software id is rotated, but the
+        fingerprint of a receiver slow enough for that race to have been possible,
+        and the thing to look for in the trace next to a wrong-layout report.
+        Another program's frame means nothing at all is wrong.
+
+        Told apart by our own records, because nothing else can tell them apart.
+        The software id cannot: the 1-15 range is shared, and Logi Options+ walks
+        all of it, so the id it stamps is one we use too. Deciding by id therefore
+        classified every one of its frames -- roughly seventeen for each of ours on
+        a machine running it -- as this receiver missing its deadline, which reads
+        as a hardware fault on a completely healthy machine.
         """
-        # A software id we never issue cannot be an answer to anything we asked, so
-        # it is another program's conversation reaching us through a shared
-        # collection -- not a slow device. Blaming the device for that reads as a
-        # fault when it is somebody else talking normally, and on a machine running
-        # Logi Options+ it is the overwhelming majority of these frames.
-        sw_id = frame[3] & 0x0F if len(frame) > 3 else 0
-        if sw_id and sw_id not in p.SW_IDS:
+        if not self._was_ours(frame):
+            sw_id = frame[3] & 0x0F if len(frame) > 3 else 0
+            now = time.monotonic()
+            self._last_foreign_frame = now
+            if sw_id:
+                self._foreign_sw_ids[sw_id] = now
+            self._note_receiver_busy(frame)
             total = trace.HEALTH.bump("other_software_frames")
             trace.record(trace.ORPHAN, self.label, frame, f"other software: {summary}")
-            now = time.monotonic()
             if total == 1 or now - self._last_orphan_warning >= ORPHAN_WARN_INTERVAL:
                 self._last_orphan_warning = now
                 log.info(
@@ -347,6 +429,18 @@ class Transport:
                 DEFAULT_TIMEOUT,
             )
             trace.anomaly(f"orphan reply on {self.label}: {summary}")
+
+    def _note_receiver_busy(self, frame: bytes) -> None:
+        """Count the receiver telling somebody else it has no room.
+
+        Not our error -- it answers their request -- but it is the clearest signal
+        available that the bus is saturated right now, and the reason our own
+        requests occasionally time out next to a burst.
+        """
+        if len(frame) < 6:
+            return
+        if frame[2] in (p.ERROR_HIDPP20, p.ERROR_HIDPP10) and frame[5] == ERROR_RESOURCE:
+            trace.HEALTH.bump("receiver_busy")
 
     def _fail_pending(self, exc: Exception) -> None:
         with self._sink_lock:
@@ -385,6 +479,8 @@ class Transport:
                 device_index, feature_index, function, params, sw_id=sw_id, long_report=long_report
             )
             sink = _ResponseSink(device_index, feature_index, p.function_byte(function, sw_id))
+            self._remember_request(device_index, feature_index, sink.func_byte)
+            self._await_quiet()
             with self._sink_lock:
                 self._sink = sink
             try:
@@ -429,6 +525,8 @@ class Transport:
             # a *previous* window be told apart and discarded.
             sw_id = self._next_sw_id()
             sink = _ScanSink(wanted, p.function_byte(p.ROOT_GET_PROTOCOL_VERSION, sw_id))
+            for index in wanted:
+                self._remember_request(index, p.FEATURE_ROOT, sink.func_byte)
             with self._sink_lock:
                 self._sink = sink
             try:

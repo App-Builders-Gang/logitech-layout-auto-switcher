@@ -115,6 +115,10 @@ ACTIVE_WINDOW = 20.0
 #: Spread of the random delay added to a write while a peer is around, so two machines
 #: that both briefly think they are active cannot settle into a synchronised fight.
 PEER_JITTER = 0.4
+#: How often to re-check which Logitech software is running here. This shells out to
+#: list processes, so it is deliberately infrequent -- rivals appear and disappear on
+#: the timescale of somebody launching an app, not of a keystroke.
+RIVAL_RECHECK = 120.0
 
 
 class _Event(Enum):
@@ -223,6 +227,11 @@ class Agent:
         self._last_written: dict[int, int] = {}
         #: Whether we are currently letting another machine have the keyboard.
         self._stood_down = False
+        #: Logitech software running on *this* machine, and when we last looked.
+        #: Cached because finding out means listing every process.
+        self._rivals: list[str] = []
+        self._rivals_checked = 0.0
+        self._rival_warned = False
         self.notifier = notify.Notifier(enabled=config.notify)
 
     # -- public API -----------------------------------------------------------
@@ -240,6 +249,11 @@ class Agent:
         )
         host = diagnostics.host_summary()
         log.info("host: %s", diagnostics.describe_host(host))
+        # Reuse the process list we just paid for. Without this the first foreign
+        # frame would shell out from a *reader* thread -- ``_note_foreign_write``
+        # runs there -- and stall frame reading for as long as `ps` takes.
+        self._rivals = list(host["competing_software"])
+        self._rivals_checked = time.monotonic()
         if host["non_latin_script"]:
             # Worth saying plainly: this is not something logiswitch can correct, and
             # it produces wrong characters that look exactly like a layout fault.
@@ -378,6 +392,22 @@ class Agent:
         if self._foreign_warned:
             return
         self._foreign_warned = True
+        rivals = self._local_rival()
+        if rivals:
+            # Do not assert "another machine" when a program on this one explains it
+            # just as well. Naming both possibilities is the honest report, and the
+            # advice is the same either way.
+            log.warning(
+                "this keyboard's platform is being set by software that is not us "
+                "(software id 0x%02X). %s %s running here, so it may be that rather "
+                "than another machine. Correcting it back to %s.",
+                sw_id,
+                " and ".join(rivals),
+                "is" if len(rivals) == 1 else "are",
+                self.cfg.target_os,
+            )
+            trace.anomaly(f"foreign setHostPlatform, swId 0x{sw_id:X}, local rivals present")
+            return
         if sw_id == p.SW_ID:
             # Our own former fixed software id: the peer is an old build of this very
             # tool, which will not stand down for anyone. Saying so is the single most
@@ -424,6 +454,17 @@ class Agent:
         if self._foreign_warned:
             return
         self._foreign_warned = True
+        rivals = self._local_rival()
+        if rivals:
+            log.warning(
+                "this keyboard's platform was set by software that is not us. %s %s "
+                "running here, so it may be that rather than another machine. "
+                "Correcting it back to %s.",
+                " and ".join(rivals),
+                "is" if len(rivals) == 1 else "are",
+                self.cfg.target_os,
+            )
+            return
         log.warning(
             "another machine is setting this keyboard's platform. Whichever of you is "
             "being typed on should win; if it keeps flapping, run `logiswitch doctor` "
@@ -601,11 +642,29 @@ class Agent:
         :data:`FAST_RECHECK`, which is what keeps a keyboard that drops the setting
         every few seconds usable rather than wrong half the time.
         """
-        if self._peer_present():
+        if self._peer_present() and not self._local_rival():
             # Another machine is writing too. Re-checking twice a second would just
             # make the tug-of-war faster; neither of us can win it that way.
+            #
+            # Only when it really is another machine. If Logi Options+ is running
+            # here, the same evidence is equally explained by it -- and easing off
+            # against a device that keeps dropping the setting is precisely backwards:
+            # close re-checking is the only thing that keeps such a keyboard usable.
             return False
         return self._clean_checks < SETTLED_CHECKS
+
+    def _local_rival(self) -> list[str]:
+        """Logitech software running on this machine, cached.
+
+        Listing processes is a subprocess call, so the answer is reused for
+        :data:`RIVAL_RECHECK`. Nothing here is time-critical: this only ever decides
+        whether ambiguous evidence is allowed to make us yield.
+        """
+        now = time.monotonic()
+        if not self._rivals_checked or now - self._rivals_checked >= RIVAL_RECHECK:
+            self._rivals_checked = now
+            self._rivals = diagnostics.competing_software()
+        return self._rivals
 
     def _standing_down(self) -> bool:
         """Should this machine leave the keyboard alone right now?
@@ -615,10 +674,36 @@ class Agent:
         has not been used for a while. Any one of them missing means behave exactly as
         a single machine would -- a lone agent must never stop correcting just because
         nobody has typed for a minute.
+
+        And never on evidence a program on *this* machine could have produced. Taking
+        turns is a bargain between machines: yielding is right because somebody is
+        typing on the other one. No such person exists behind Logi Options+, so
+        yielding to it means going quiet and staying quiet for as long as nobody
+        touches this keyboard -- which is exactly when the layout needs to be right
+        for the next person who does. The protocol cannot tell the two apart: a
+        platform set by "host software" says only that, and the peer detectors
+        (:meth:`_note_foreign_write`, :meth:`_adopt_foreign_observations`) conclude
+        "another machine" from evidence a local rival satisfies equally well. So when
+        one is running, ambiguity resolves to correcting rather than surrendering --
+        and sustained fighting is reported by :meth:`_warn_about_contention`, which
+        is the response that actually helps.
         """
         if self.cfg.observe:
             return True
         if not self._peer_present():
+            return False
+        rivals = self._local_rival()
+        if rivals:
+            if not self._rival_warned:
+                self._rival_warned = True
+                log.info(
+                    "not standing down: the platform is being set by software that is "
+                    "not us, but %s %s running here, so this cannot be attributed to "
+                    "another machine. Holding %s and correcting as usual.",
+                    " and ".join(rivals),
+                    "is" if len(rivals) == 1 else "are",
+                    self.cfg.target_os,
+                )
             return False
         idle = self._idle_seconds()
         if idle is None:
@@ -709,6 +794,10 @@ class Agent:
         peer = ""
         if self._peer_present():
             peer = f" | peer sw0x{self._peer_sw_id:02X}" if self._peer_sw_id else " | peer present"
+            if self._local_rival():
+                # Could equally be the software running here, and this line is read
+                # as a record of what was true at the time. Do not let it assert one.
+                peer += " (or local software)"
             if self._stood_down:
                 peer += " (standing down)"
         log.info(

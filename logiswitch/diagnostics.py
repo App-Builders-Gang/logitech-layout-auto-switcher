@@ -334,7 +334,9 @@ def cannot_open_hint(agent_running: bool = False) -> str | None:
     if is_windows():
         return (
             "the receiver is present but will not open. Another process may hold it "
-            "exclusively -- quit Logi Options+ and retry."
+            "exclusively. Logi Options+ normally shares it happily -- it and logiswitch "
+            "run side by side on the same collection -- so check for a second copy of "
+            "logiswitch, or another HID++ tool, before quitting it."
         )
     return (
         "the receiver is present but will not open. On Linux this is usually udev "

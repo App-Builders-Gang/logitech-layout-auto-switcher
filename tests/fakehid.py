@@ -48,11 +48,17 @@ class FakeDevice:
         dual: bool = False,
         buggy_current_host: bool = False,
         current_host: int = CURRENT_HOST,
+        platform_source: int = 3,
     ):
         self.index = index
         self.name = name
         self.features = features or {}
         self.platform = platform
+        #: What the device says set its platform: 0 default, 1 keyboard (Fn+O),
+        #: 2 auto, 3 host software. Real hardware reports 3 after *any* software
+        #: write, including ours -- which is exactly why "3" alone never proves the
+        #: writer was on another machine. Adjustable so a test can say which it means.
+        self.platform_source = platform_source
         self.dual = dual
         self.set_calls: list[int] = []
         #: Host index of every setHostPlatform, so a test can see what was addressed.
@@ -229,7 +235,9 @@ class FakeReceiver:
             host_index = device.current_host if host == p.HOST_CURRENT else host
             if host_index != device.current_host:
                 return self._pad(frame, bytes([host_index, 0, 0xFF, 0]))
-            return self._pad(frame, bytes([host_index, 1, device.platform or 0, 3]))
+            return self._pad(
+                frame, bytes([host_index, 1, device.platform or 0, device.platform_source])
+            )
         if function == p.MP_SET_HOST_PLATFORM:
             host, platform = params[0], params[1]
             device.set_hosts.append(host)
@@ -322,6 +330,77 @@ class FakeHandle:
 #: opened it. `backend.open_path` takes only a path, and threading an owner through it
 #: would change production code to suit a test.
 current_owner: list[str] = ["?"]
+
+
+# -- another program on the same receiver -------------------------------------
+
+#: Device slots Logi Options+ was measured pinging, in order, and what the receiver
+#: answered for each. Slot 5 holds the keyboard and answers properly; the empty slots
+#: get HID++ 1.0 errors, and 0xFF gets "invalid subid" because it is not a device.
+#: Codes: 0x09 resource error (the receiver is out of room), 0x04 connection request
+#: failed, 0x01 invalid subid.
+OPTIONS_PLUS_SWEEP = (
+    (1, None),
+    (2, 0x09),
+    (3, 0x09),
+    (4, 0x09),
+    (5, None),
+    (6, 0x04),
+    (0xFF, 0x01),
+)
+
+
+def options_plus_frames(sw_id: int) -> list[bytes]:
+    """One sweep of Logi Options+ traffic, as measured on real hardware.
+
+    Reproduced from ``logiswitch.trace.log`` on a Mac running Options+ 2.6.941708:
+    it walks every device slot with a root ping, roughly fifty frames a minute,
+    stamping an ordinary software id that increments 1..15 -- the same range this
+    project uses. That overlap is the whole point of replaying it: a classifier that
+    asks "is this a software id we never issue?" cannot see any of this.
+    """
+    func_byte = p.function_byte(p.ROOT_GET_PROTOCOL_VERSION, sw_id)
+    frames = []
+    for index, error in OPTIONS_PLUS_SWEEP:
+        if error is None:
+            reply = bytearray(p.LEN_LONG)
+            reply[0] = p.REPORT_LONG
+            reply[1] = index
+            reply[2] = p.FEATURE_ROOT
+            reply[3] = func_byte
+            reply[4:7] = bytes([0x04, 0x05, 0xAA])
+            frames.append(bytes(reply))
+            continue
+        out = bytearray(p.LEN_SHORT)
+        out[0] = p.REPORT_SHORT
+        out[1] = index
+        out[2] = p.ERROR_HIDPP10
+        out[3] = p.FEATURE_ROOT
+        out[4] = func_byte
+        out[5] = error
+        frames.append(bytes(out))
+    return frames
+
+
+def options_plus_sweep(receiver: FakeReceiver, sw_id: int) -> int:
+    """Put one Options+ sweep in front of every host listening to `receiver`.
+
+    Unsolicited by construction: nothing here answers a request we made, which is
+    exactly how it arrives in reality.
+
+    Routed by report id, the way the hardware does it: a short report arrives on the
+    short collection and a long one on the long collection. Delivering every frame to
+    every open handle would double the count on the usual two-collection receiver and
+    make the numbers a test asserts on an artefact of the fake.
+    """
+    frames = options_plus_frames(sw_id)
+    handles = list(receiver.handles)
+    for frame in frames:
+        wanted = PATH_SHORT if frame[0] == p.REPORT_SHORT else PATH_LONG
+        targets = [h for h in handles if h.path == wanted] or handles
+        for handle in targets:
+            handle.inbox.put(frame)
+    return len(frames)
 
 
 def install(monkeypatch, receiver: FakeReceiver, single_collection: bool = False) -> FakeReceiver:

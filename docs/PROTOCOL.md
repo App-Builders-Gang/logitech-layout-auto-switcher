@@ -180,9 +180,37 @@ The keyboard stays in whatever layout the other computer left it in.
 
 That gap is the entire reason this project exists: it fires on device *arrival* —
 the event Options+ ignores — and targets the same value Options+ wants, so the
-two cooperate rather than fight. If they are ever pointed at different platforms
-on the same host, Options+ wins; the agent detects that after three consecutive
-reverts and says so in the log.
+two cooperate rather than fight. Pointed at different platforms on the same host
+they do fight, and the agent says so once corrections pass `REVERT_THRESHOLD` in
+a `REVERT_WINDOW` — counted over a window rather than consecutively, because each
+correction is followed by a check that reads back as correct, so an "in a row"
+counter is reset by the agent's own success and never climbs.
+
+### What sharing the receiver actually costs
+
+Measured on macOS, Options+ 2.6.941708 running alongside the agent, ~20 minutes
+of trace plus every rotated log on the machine:
+
+| | |
+|---|---|
+| Frames from Options+ vs from us | 5,952 vs 349 |
+| What it sends | `feat0x00 fn1` root pings across dev1–6 and dev255 |
+| Cadence | a sweep pair every ~17 s, ~50 frames/min |
+| `resource error (0x09)` | 2,381 — the receiver refusing work under its own bursts |
+| Software ids it stamps | 0x1–0x9, incrementing |
+| `setHostPlatform` writes | **0** |
+
+Two consequences the code depends on:
+
+**Third-party frames cannot be identified by software id.** Options+ walks the same
+1–15 range this project rotates through, so "an id we never issue" only ever
+catches Solaar's reserved `0x0B`. A reply is ours if and only if it answers a
+request we recorded sending — which is what `Transport._was_ours` checks.
+
+**A platform set by "host software" does not prove another machine.** Source code
+`3` says only that software wrote it, and Options+ satisfies that as well as a peer
+across a KVM. So the agent refuses to stand down while a local rival is running:
+yielding is a bargain between machines, and there is nobody typing on Options+.
 
 ## Recorded hardware profile
 

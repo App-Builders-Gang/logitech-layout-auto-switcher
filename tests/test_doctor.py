@@ -90,9 +90,16 @@ def test_competing_software_is_reported(monkeypatch, doctor):
     assert code == 1
     assert "logioptionsplus_agent" in out
     assert "is running" in out, "singular agreement for one process"
-    # It must be named as a candidate, not convicted: on the machine this was
-    # written against, quitting Options+ changed nothing at all.
-    assert "confirm it before blaming it" in out
+    # Named, but not convicted. Quitting Options+ changed nothing on the machine
+    # this was written against, and measuring it later explained why: over hours of
+    # traces it only ever polls device slots, and was never once seen setting the
+    # host platform. Reporting it as the likely cause of a wrong layout was a guess
+    # the evidence does not support.
+    assert "Expected company rather than a fault" in out
+    assert "not one host platform write" in out
+    # The one thing it does change is that turn-taking is suspended, because the
+    # protocol cannot tell it apart from another machine. Say so where it is read.
+    assert "SUSPENDED while logioptionsplus_agent" in out
 
 
 def test_a_sleeping_keyboard_is_reported_not_silently_skipped(doctor):

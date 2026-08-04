@@ -183,6 +183,13 @@ def test_an_orphan_reply_is_counted_and_warned_about(transport, caplog):
     orphan = _reply_stamped(
         fakehid.MX_KEYS_INDEX, fakehid.MULTIPLATFORM_INDEX, p.MP_GET_HOST_PLATFORM, p.SW_IDS[3]
     )
+    # A straggler is only a straggler if we asked the question. Without this the
+    # frame is indistinguishable from another program's -- which is the point.
+    transport._remember_request(
+        fakehid.MX_KEYS_INDEX,
+        fakehid.MULTIPLATFORM_INDEX,
+        p.function_byte(p.MP_GET_HOST_PLATFORM, p.SW_IDS[3]),
+    )
     transport._dispatch(orphan)
     assert trace.HEALTH.get("orphans") == 1
     assert "nothing waiting for it" in caplog.text
@@ -295,10 +302,16 @@ def test_another_programs_traffic_is_not_blamed_on_the_device(transport, caplog)
     Its replies reach us as orphans. Reporting them as "the device is answering
     later than the deadline" describes a fault that is not happening -- on Windows
     it was 151 frames of a function this project never even calls.
+
+    Stamped with a software id we issue ourselves, because that is the real case
+    and the one the first attempt at this got wrong. Options+ walks the whole 1-15
+    range exactly as we do, so a classifier keyed on "an id we never use" could
+    only ever catch Solaar; against Options+ it was unreachable, and 5,952 of its
+    frames in twenty minutes were logged as this receiver missing its deadline.
     """
     caplog.set_level("INFO", logger="logiswitch.hidpp.transport")
     foreign = _reply_stamped(
-        fakehid.MX_KEYS_INDEX, fakehid.MULTIPLATFORM_INDEX, p.MP_GET_HOST_PLATFORM, p.SOLAAR_SW_ID
+        fakehid.MX_KEYS_INDEX, fakehid.MULTIPLATFORM_INDEX, p.MP_GET_HOST_PLATFORM, p.SW_IDS[1]
     )
     transport._dispatch(foreign)
 
@@ -313,8 +326,81 @@ def test_our_own_straggler_is_still_reported_as_one(transport, caplog):
     ours = _reply_stamped(
         fakehid.MX_KEYS_INDEX, fakehid.MULTIPLATFORM_INDEX, p.MP_GET_HOST_PLATFORM, p.SW_IDS[2]
     )
+    transport._remember_request(
+        fakehid.MX_KEYS_INDEX,
+        fakehid.MULTIPLATFORM_INDEX,
+        p.function_byte(p.MP_GET_HOST_PLATFORM, p.SW_IDS[2]),
+    )
     transport._dispatch(ours)
 
     assert trace.HEALTH.get("orphans") == 1
     assert trace.HEALTH.get("other_software_frames") == 0
     assert "nothing waiting for it" in caplog.text
+
+
+# -- sharing the receiver with Logi Options+ ----------------------------------
+
+
+def _drain(transport, expected, timeout=2.0):
+    """Wait for the reader threads to have dispatched `expected` foreign frames."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if trace.HEALTH.get("other_software_frames") >= expected:
+            return
+        time.sleep(0.01)
+
+
+def test_a_full_options_plus_sweep_is_never_blamed_on_the_receiver(receiver, transport, caplog):
+    """Replay of real traffic: the whole point of this change.
+
+    Measured on a Mac with Options+ 2.6.941708 running, over twenty minutes: 5,952
+    of its frames against 349 of ours, every one of them a root ping across the
+    device slots, and 844 log lines announcing that the receiver was missing its
+    1.2s deadline. None of that was true. Nothing was wrong with the receiver, and
+    nothing was wrong with the link -- another program was simply using it.
+    """
+    caplog.set_level("WARNING", logger="logiswitch.hidpp.transport")
+    sent = 0
+    # Software ids 1..9, incrementing, exactly as it was seen to stamp them -- and
+    # squarely inside the range this project issues.
+    for sw_id in range(1, 10):
+        sent += fakehid.options_plus_sweep(receiver, sw_id)
+    _drain(transport, sent)
+
+    assert trace.HEALTH.get("other_software_frames") == sent
+    assert trace.HEALTH.get("orphans") == 0, "not one of these is the receiver's fault"
+    assert "deadline" not in caplog.text
+    assert "nothing waiting for it" not in caplog.text
+
+
+def test_the_receiver_saying_it_is_full_is_counted(receiver, transport):
+    """0x09 answers somebody else's request, but it is why ours occasionally time out."""
+    fakehid.options_plus_sweep(receiver, sw_id=2)
+    _drain(transport, len(fakehid.OPTIONS_PLUS_SWEEP))
+    busy = sum(1 for _index, error in fakehid.OPTIONS_PLUS_SWEEP if error == 0x09)
+    assert trace.HEALTH.get("receiver_busy") == busy
+
+
+def test_our_own_request_still_gets_through_the_noise(receiver, transport):
+    for sw_id in range(1, 10):
+        fakehid.options_plus_sweep(receiver, sw_id)
+    reply = transport.request(
+        fakehid.MX_KEYS_INDEX, p.FEATURE_ROOT, p.ROOT_GET_PROTOCOL_VERSION, b"\x00\x00\xaa"
+    )
+    assert reply[:3] == bytes([4, 5, 0xAA]), "a busy bus must not cost us the answer"
+
+
+def test_software_ids_another_program_is_using_are_stepped_around(transport):
+    """Nothing reserves a software id, so avoid whichever are hot rather than hope."""
+    hot = {p.SW_IDS[0], p.SW_IDS[1], p.SW_IDS[2]}
+    now = time.monotonic()
+    transport._foreign_sw_ids = dict.fromkeys(hot, now)
+    chosen = {transport._next_sw_id() for _ in range(len(p.SW_IDS))}
+    assert chosen, "it must still return something"
+    assert not (chosen & hot), f"picked an id another program is using: {chosen & hot}"
+
+
+def test_stepping_around_never_runs_out_of_ids(transport):
+    """Every id busy is still an answer, not a hang: the bias is a preference."""
+    transport._foreign_sw_ids = dict.fromkeys(p.SW_IDS, time.monotonic())
+    assert transport._next_sw_id() in p.SW_IDS
