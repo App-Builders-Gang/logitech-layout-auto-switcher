@@ -64,43 +64,31 @@ _APP_USER_MODEL_ID = r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\
 # LoadXml; this one is the cheapest.
 _TEMPLATE_TOAST_TEXT_01 = 0
 
-_com = ctypes.WinDLL("combase")
-_com.WindowsCreateString.argtypes = [
-    ctypes.c_wchar_p,
-    ctypes.c_uint32,
-    ctypes.POINTER(ctypes.c_void_p),
-]
-_com.WindowsCreateString.restype = ctypes.c_long
-_com.WindowsDeleteString.argtypes = [ctypes.c_void_p]
-_com.WindowsDeleteString.restype = ctypes.c_long
-_com.RoInitialize.argtypes = [ctypes.c_int]
-_com.RoInitialize.restype = ctypes.c_long
-_com.RoGetActivationFactory.argtypes = [
-    ctypes.c_void_p,
-    ctypes.POINTER(_GUID),
-    ctypes.POINTER(ctypes.c_void_p),
-]
-_com.RoGetActivationFactory.restype = ctypes.c_long
+# ``combase`` is loaded lazily by _load_com_once, so importing this module on a
+# non-Windows host -- which the tests do, to exercise _toast_xml and the AUMID --
+# never touches a DLL that only exists on Windows.
+_com: Any = None
 
 _PTR_SIZE = ctypes.sizeof(ctypes.c_void_p)
 
 # WinRT interfaces derive from IInspectable (3 IUnknown + 3 IInspectable slots),
 # so the first method declared on each interface is vtable slot 6.
+#
+# WINFUNCTYPE exists only on Windows; the prototypes are never invoked anywhere
+# else (there is no COM to call), so fall back to CFUNCTYPE and let the module be
+# imported on any platform.
+_WINFUNCTYPE = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)
 _HRESULT = ctypes.c_long
 _OUT_PTR = ctypes.POINTER(ctypes.c_void_p)
 _GUID_PTR = ctypes.POINTER(_GUID)
 
-_QUERY_INTERFACE = ctypes.WINFUNCTYPE(_HRESULT, ctypes.c_void_p, _GUID_PTR, _OUT_PTR)
-_RELEASE = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)
-_GET_TEMPLATE_CONTENT = ctypes.WINFUNCTYPE(_HRESULT, ctypes.c_void_p, ctypes.c_uint, _OUT_PTR)
-_CREATE_TOAST_NOTIFIER_WITH_ID = ctypes.WINFUNCTYPE(
-    _HRESULT, ctypes.c_void_p, ctypes.c_void_p, _OUT_PTR
-)
-_LOAD_XML = ctypes.WINFUNCTYPE(_HRESULT, ctypes.c_void_p, ctypes.c_void_p)
-_CREATE_TOAST_NOTIFICATION = ctypes.WINFUNCTYPE(
-    _HRESULT, ctypes.c_void_p, ctypes.c_void_p, _OUT_PTR
-)
-_SHOW = ctypes.WINFUNCTYPE(_HRESULT, ctypes.c_void_p, ctypes.c_void_p)
+_QUERY_INTERFACE = _WINFUNCTYPE(_HRESULT, ctypes.c_void_p, _GUID_PTR, _OUT_PTR)
+_RELEASE = _WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)
+_GET_TEMPLATE_CONTENT = _WINFUNCTYPE(_HRESULT, ctypes.c_void_p, ctypes.c_uint, _OUT_PTR)
+_CREATE_TOAST_NOTIFIER_WITH_ID = _WINFUNCTYPE(_HRESULT, ctypes.c_void_p, ctypes.c_void_p, _OUT_PTR)
+_LOAD_XML = _WINFUNCTYPE(_HRESULT, ctypes.c_void_p, ctypes.c_void_p)
+_CREATE_TOAST_NOTIFICATION = _WINFUNCTYPE(_HRESULT, ctypes.c_void_p, ctypes.c_void_p, _OUT_PTR)
+_SHOW = _WINFUNCTYPE(_HRESULT, ctypes.c_void_p, ctypes.c_void_p)
 
 # ManagerStatics vtable: CreateToastNotifier=6, CreateToastNotifierWithId=7,
 # GetTemplateContent=8. The id-less CreateToastNotifier (slot 6) only resolves
@@ -113,8 +101,39 @@ _SHOW = ctypes.WINFUNCTYPE(_HRESULT, ctypes.c_void_p, ctypes.c_void_p)
 _thread_state = threading.local()
 
 
+def _load_com_once() -> None:
+    """Load combase and pin its signatures, the first time COM is needed.
+
+    Process-wide and idempotent: the DLL load is the part that fails on non-Windows
+    hosts, so it is deferred here rather than run at import, and never runs unless
+    a toast is actually being raised.
+    """
+    global _com
+    if _com is not None:
+        return
+    lib = ctypes.WinDLL("combase")
+    lib.WindowsCreateString.argtypes = [
+        ctypes.c_wchar_p,
+        ctypes.c_uint32,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    lib.WindowsCreateString.restype = ctypes.c_long
+    lib.WindowsDeleteString.argtypes = [ctypes.c_void_p]
+    lib.WindowsDeleteString.restype = ctypes.c_long
+    lib.RoInitialize.argtypes = [ctypes.c_int]
+    lib.RoInitialize.restype = ctypes.c_long
+    lib.RoGetActivationFactory.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(_GUID),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    lib.RoGetActivationFactory.restype = ctypes.c_long
+    _com = lib
+
+
 def _ensure_runtime_initialized() -> None:
-    """Call RoInitialize once for the calling thread. Re-entrant calls are harmless."""
+    """Load combase and call RoInitialize for the calling thread. Re-entrant-safe."""
+    _load_com_once()
     if getattr(_thread_state, "initialized", False):
         return
     # RO_INIT_SINGLETHREADED. S_FALSE (already initialised on this thread) is fine,
