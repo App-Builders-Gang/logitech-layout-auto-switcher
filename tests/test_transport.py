@@ -287,3 +287,34 @@ def test_error_frames_are_keyed_correctly():
     assert transport_module.Transport._reply_key(error) == (0x05, 0x10, p.function_byte(2, 5))
     reply = bytes([0x11, 0x05, 0x10, p.function_byte(2, 5)]) + bytes(16)
     assert transport_module.Transport._reply_key(reply) == (0x05, 0x10, p.function_byte(2, 5))
+
+
+def test_another_programs_traffic_is_not_blamed_on_the_device(transport, caplog):
+    """Logi Options+ shares the receiver and polls it constantly.
+
+    Its replies reach us as orphans. Reporting them as "the device is answering
+    later than the deadline" describes a fault that is not happening -- on Windows
+    it was 151 frames of a function this project never even calls.
+    """
+    caplog.set_level("INFO", logger="logiswitch.hidpp.transport")
+    foreign = _reply_stamped(
+        fakehid.MX_KEYS_INDEX, fakehid.MULTIPLATFORM_INDEX, p.MP_GET_HOST_PLATFORM, p.SOLAAR_SW_ID
+    )
+    transport._dispatch(foreign)
+
+    assert trace.HEALTH.get("other_software_frames") == 1
+    assert trace.HEALTH.get("orphans") == 0, "not our straggler, so not our orphan"
+    assert "another program is talking to this device" in caplog.text
+    assert "deadline" not in caplog.text, "do not blame the device for someone else"
+
+
+def test_our_own_straggler_is_still_reported_as_one(transport, caplog):
+    caplog.set_level("WARNING", logger="logiswitch.hidpp.transport")
+    ours = _reply_stamped(
+        fakehid.MX_KEYS_INDEX, fakehid.MULTIPLATFORM_INDEX, p.MP_GET_HOST_PLATFORM, p.SW_IDS[2]
+    )
+    transport._dispatch(ours)
+
+    assert trace.HEALTH.get("orphans") == 1
+    assert trace.HEALTH.get("other_software_frames") == 0
+    assert "nothing waiting for it" in caplog.text

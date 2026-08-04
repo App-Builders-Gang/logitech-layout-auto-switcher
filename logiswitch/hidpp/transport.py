@@ -312,6 +312,27 @@ class Transport:
         receiver answering slowly enough for that race to have been possible, and
         it is the thing to look for in the trace next to a wrong-layout report.
         """
+        # A software id we never issue cannot be an answer to anything we asked, so
+        # it is another program's conversation reaching us through a shared
+        # collection -- not a slow device. Blaming the device for that reads as a
+        # fault when it is somebody else talking normally, and on a machine running
+        # Logi Options+ it is the overwhelming majority of these frames.
+        sw_id = frame[3] & 0x0F if len(frame) > 3 else 0
+        if sw_id and sw_id not in p.SW_IDS:
+            total = trace.HEALTH.bump("other_software_frames")
+            trace.record(trace.ORPHAN, self.label, frame, f"other software: {summary}")
+            now = time.monotonic()
+            if total == 1 or now - self._last_orphan_warning >= ORPHAN_WARN_INTERVAL:
+                self._last_orphan_warning = now
+                log.info(
+                    "%s: another program is talking to this device (%d frames so far, "
+                    "software id 0x%02X). Harmless, but it shares the receiver with us.",
+                    self.label,
+                    total,
+                    sw_id,
+                )
+            return
+
         total = trace.HEALTH.bump("orphans")
         trace.record(trace.ORPHAN, self.label, frame, summary)
         now = time.monotonic()
