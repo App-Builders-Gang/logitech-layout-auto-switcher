@@ -404,3 +404,42 @@ def test_stepping_around_never_runs_out_of_ids(transport):
     """Every id busy is still an answer, not a hang: the bias is a preference."""
     transport._foreign_sw_ids = dict.fromkeys(p.SW_IDS, time.monotonic())
     assert transport._next_sw_id() in p.SW_IDS
+
+
+def test_an_answered_request_stops_claiming_later_frames(transport):
+    """The ledger tracks what could still be outstanding, not everything ever asked.
+
+    Every HID++ host pings every slot on feature 0x00, so those keys differ only by
+    software id -- and the ranges overlap. Holding a completed request's key made the
+    next program's ping look like our own straggler. Seen on real hardware within a
+    minute: an Options+ ping landing on the key our start-up scan had just used.
+    """
+    transport.request(
+        fakehid.MX_KEYS_INDEX, p.FEATURE_ROOT, p.ROOT_GET_PROTOCOL_VERSION, b"\x00\x00\xaa"
+    )
+    theirs = _reply_stamped(
+        fakehid.MX_KEYS_INDEX, p.FEATURE_ROOT, p.ROOT_GET_PROTOCOL_VERSION, p.SW_IDS[0]
+    )
+    transport._dispatch(theirs)
+    assert trace.HEALTH.get("orphans") == 0, "our answered request must not adopt this"
+    assert trace.HEALTH.get("other_software_frames") == 1
+
+
+def test_the_software_id_of_an_error_frame_is_read_from_the_right_byte(transport, caplog):
+    """An error carries the function byte one along; frame[3] is its feature."""
+    caplog.set_level("INFO", logger="logiswitch.hidpp.transport")
+    error = bytes(
+        [
+            0x10,
+            2,
+            p.ERROR_HIDPP10,
+            p.FEATURE_ROOT,
+            p.function_byte(p.ROOT_GET_PROTOCOL_VERSION, 0x02),
+            0x09,
+            0x00,
+        ]
+    )
+    transport._dispatch(error)
+    assert transport._frame_sw_id(error) == 0x02
+    assert "software id 0x02" in caplog.text
+    assert "0x00" not in caplog.text, "0x00 is the notification id; claiming it misleads"

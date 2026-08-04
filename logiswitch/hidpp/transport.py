@@ -200,6 +200,20 @@ class Transport:
             self._recent = {key: due for key, due in self._recent.items() if due > now}
         self._recent[(device_index, feature_index, func_byte)] = now + RECENT_REQUEST_MEMORY
 
+    def _forget_request(self, device_index: int, feature_index: int, func_byte: int) -> None:
+        """Drop a request that has been answered.
+
+        What the ledger is really tracking is "could a reply to this still be
+        outstanding?", and once ours has arrived the answer is no. Keeping it would
+        make the *next* frame with the same key look like our straggler -- and on a
+        root ping that is not hypothetical: every host software pings every slot on
+        feature 0x00, so the key differs only by software id, and the ranges overlap.
+        Observed within a minute of deploying this: an Options+ ping landing on the
+        key our start-up scan had just used, and being reported as this receiver
+        answering late.
+        """
+        self._recent.pop((device_index, feature_index, func_byte), None)
+
     def _was_ours(self, frame: bytes) -> bool:
         """Could this frame be an answer to something we asked?
 
@@ -325,6 +339,19 @@ class Transport:
             return (frame[1], frame[3], frame[4]) if len(frame) >= 5 else None
         return (frame[1], frame[2], frame[3])
 
+    @staticmethod
+    def _frame_sw_id(frame: bytes) -> int:
+        """The software id that stamped `frame`, or 0 if it carries none.
+
+        Read from the same byte :meth:`_reply_key` uses, because an error frame
+        carries the function byte one position further along. Taking ``frame[3]``
+        unconditionally reads an error's *feature* byte instead, and reported every
+        one of them as software id 0x00 -- which is the id reserved for
+        notifications, so the message was not merely wrong but misleading.
+        """
+        key = Transport._reply_key(frame)
+        return (key[2] & 0x0F) if key is not None else 0
+
     def _abandon(self, device_index: int, feature_index: int, func_byte: int) -> None:
         """Remember a request that gave up waiting.
 
@@ -396,7 +423,7 @@ class Transport:
         as a hardware fault on a completely healthy machine.
         """
         if not self._was_ours(frame):
-            sw_id = frame[3] & 0x0F if len(frame) > 3 else 0
+            sw_id = self._frame_sw_id(frame)
             now = time.monotonic()
             self._last_foreign_frame = now
             if sw_id:
@@ -501,6 +528,9 @@ class Transport:
             finally:
                 with self._sink_lock:
                     self._sink = None
+                if sink.event.is_set():
+                    # Answered, so nothing more can legitimately arrive on this key.
+                    self._forget_request(device_index, feature_index, sink.func_byte)
         if sink.error is not None:
             trace.HEALTH.bump("errors")
             raise sink.error
@@ -553,6 +583,8 @@ class Transport:
             finally:
                 with self._sink_lock:
                     self._sink = None
+                for index in sink.frames:
+                    self._forget_request(index, p.FEATURE_ROOT, sink.func_byte)
 
         found: dict[int, tuple[int, int]] = {}
         busy: list[int] = []
