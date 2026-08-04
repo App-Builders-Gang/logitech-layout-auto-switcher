@@ -16,6 +16,9 @@ from logiswitch import agent as agent_module
 from logiswitch.agent import Agent, AgentConfig
 from logiswitch.hidpp import protocol as p
 
+#: Captured at import, before the autouse `machine_in_use` fixture stubs it.
+REAL_SECONDS_SINCE_INPUT = activity.seconds_since_input
+
 
 def config(tmp_path, **kwargs):
     defaults = dict(target_os="windows", debounce=0.0, reassert_interval=0.0, notify=False)
@@ -44,6 +47,7 @@ def saw_peer(agent, sw_id=0x0E):
 
 
 def test_idle_time_never_raises(monkeypatch):
+    monkeypatch.setattr(activity, "seconds_since_input", REAL_SECONDS_SINCE_INPUT)
     monkeypatch.setattr(activity, "is_macos", lambda: True)
     monkeypatch.setattr(
         activity, "_macos_idle", lambda: (_ for _ in ()).throw(OSError("no window server"))
@@ -52,6 +56,7 @@ def test_idle_time_never_raises(monkeypatch):
 
 
 def test_an_unsupported_platform_cannot_arbitrate(monkeypatch):
+    monkeypatch.setattr(activity, "seconds_since_input", REAL_SECONDS_SINCE_INPUT)
     monkeypatch.setattr(activity, "is_macos", lambda: False)
     monkeypatch.setattr(activity, "is_windows", lambda: False)
     assert activity.seconds_since_input() is None
@@ -248,3 +253,49 @@ def test_the_agent_passes_the_claim_to_the_device(receiver, tmp_path, claimed):
     agent.assert_once()
     assert keyboard.set_hosts, "it wrote something"
     assert set(keyboard.set_hosts) == {claimed}, "only ever the claimed slot"
+
+
+# -- detecting a peer from what it did, not from catching it in the act --------
+
+
+def test_a_platform_set_by_other_software_is_a_peer_sighting(receiver, tmp_path, caplog):
+    """The detection that actually works on a shared receiver.
+
+    Waiting to catch another host's setHostPlatform *reply* left the peer unseen:
+    each machine reliably sees the other's reads and only sometimes its writes. But
+    "the platform is now something we did not write, set by host software" is
+    conclusive, and the device layer already works it out.
+    """
+    keyboard = receiver.devices[fakehid.MX_KEYS_INDEX]
+    keyboard.platform = 1  # not the windows target, so the first pass really writes
+    agent = Agent(config(tmp_path))
+    agent.assert_once()  # we write the windows target, and remember that we did
+    assert not agent._peer_present()
+
+    keyboard.platform = 1  # another machine sets macOS, reported as "host software"
+    with caplog.at_level("WARNING", logger="logiswitch.agent"):
+        agent.assert_once()
+
+    assert agent._peer_present(), "the platform moved under us; that is a peer"
+    assert "another machine is setting" in caplog.text
+
+
+def test_our_own_writes_are_never_mistaken_for_a_peer(receiver, tmp_path):
+    """The agent changing the platform is not evidence of anybody else."""
+    agent = Agent(config(tmp_path))
+    for _ in range(4):
+        agent.assert_once()
+    assert not agent._peer_present()
+
+
+def test_a_peer_sighting_is_only_counted_once(receiver, tmp_path, caplog):
+    keyboard = receiver.devices[fakehid.MX_KEYS_INDEX]
+    keyboard.platform = 1
+    agent = Agent(config(tmp_path))
+    agent.assert_once()
+    with caplog.at_level("WARNING", logger="logiswitch.agent"):
+        for _ in range(5):
+            keyboard.platform = 1
+            agent.assert_once()
+    warnings = [r for r in caplog.records if "another machine is setting" in r.getMessage()]
+    assert len(warnings) == 1, "say it once, not once per pass"

@@ -1,5 +1,64 @@
 # Changelog
 
+## 2.2.0 — 2026-08-04
+
+Taking turns between machines did not actually engage. Everything needed to
+notice a competing machine was being computed and then not used.
+
+### Fixed
+
+- **A second machine was never detected, so nobody ever stood down.** Peer
+  detection waited to catch another host's `setHostPlatform` *reply* on the wire.
+  On a shared receiver that is unreliable: two machines running 2.1.0 saw each
+  other's `getHostPlatform` reads constantly and each other's writes almost never,
+  so both kept correcting the layout and the log recorded no peer at all.
+
+  The conclusive evidence was already there and unused — the platform now reads as
+  a value we did not write, set by "host software", which can only mean software on
+  another machine. That is what peer detection uses. It also survives session
+  rebuilds now: the agent remembers what it last wrote per device, because a fresh
+  device object after a reconnect cannot otherwise tell its own past writes from
+  somebody else's, and reconnects are exactly what a KVM hop produces.
+
+- **A stuck `fn` blocked real corrections.** Fn was treated as a modifier that a
+  platform switch could strand, so the agent waited for it to be released. macOS
+  reports the flag for function-row and media keys, not just for a held key, so it
+  looked held for thirty seconds at a time on a keyboard nobody was touching. Fn is
+  not on the row a platform switch remaps and cannot be stranded by one, so it is
+  no longer considered.
+
+- **`doctor` blamed the wrong thing for a device it could not open.** Running it
+  while the agent is up cannot open the receiver — only one process can hold it —
+  and the report said this was the macOS Input Monitoring permission, sending
+  people to change a setting that was never the problem. It now recognises its own
+  agent and says how to get the full dump instead.
+
+- **A trace test assumed a finer clock than Windows has.** A zero-length window
+  cannot distinguish "just now" from "already past" when the monotonic clock
+  advances every 15 ms; four of five Windows jobs failed on it.
+
+### Added
+
+- **`logiswitch bundle`** — one archive with the agent log and its rotations, the
+  frame trace, the device dump, the installed service definition and the
+  environment, named after the machine that produced it. Two machines sharing a
+  keyboard produce two half-stories and the missing half is always the interesting
+  one; asking someone to find four rotated logs and a service definition in
+  different places on each OS is how a bug report arrives incomplete. Nothing in it
+  can fail the bundle: a probe that cannot reach the hardware becomes a note rather
+  than losing the logs.
+
+- **A separate notification for a competing machine**, so "another computer is also
+  setting this layout" and "the layout keeps reverting" no longer share a cooldown
+  and silence each other.
+
+### Internal
+
+**421 tests.** The suite no longer depends on how long ago somebody touched the
+computer running it — an unattended run is idle by definition, and now that peer
+detection works, agents were correctly standing down in the middle of tests that
+expected them to keep writing.
+
 ## 2.1.0 — 2026-08-04
 
 Chasing a keyboard that typed `Î` instead of `⌘⇧D`. The cause turned out to be a

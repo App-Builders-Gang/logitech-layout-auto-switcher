@@ -96,6 +96,8 @@ class HidppDevice:
         self._last_host_summary: str | None = None
         #: The platform *we* last wrote, to tell our own change from someone else's.
         self._wrote_platform: int | None = None
+        #: Times another host's software was seen setting this device's platform.
+        self.foreign_writes = 0
 
     def __repr__(self) -> str:  # pragma: no cover - debug aid
         return f"<HidppDevice index={self.index} name={self._name!r}>"
@@ -278,6 +280,17 @@ class HidppDevice:
 
     # -- which host are we? ----------------------------------------------------
 
+    def remember_last_write(self, platform_index: int | None) -> None:
+        """Seed what *we* last wrote, from state that outlives this session.
+
+        Sessions are rebuilt constantly -- every device event drops them -- and a
+        fresh device object cannot otherwise tell its own past writes from another
+        machine's. Without this the peer detection resets on every reconnect and
+        never fires.
+        """
+        if self._wrote_platform is None:
+            self._wrote_platform = platform_index
+
     def claim_host(self, host_index: int | None) -> None:
         """Pin the Easy-Switch host this device will be addressed on.
 
@@ -354,13 +367,39 @@ class HidppDevice:
         trace.note(f"dev{self.index} {summary}")
         if previous is None:
             log.debug("device %d %s", self.index, summary)
-            return
-        log.info("device %d platform record changed: %s -> %s", self.index, previous, summary)
-        if record["platform_source"] == 1 and record["platform_index"] != self._wrote_platform:
+        else:
+            log.info("device %d platform record changed: %s -> %s", self.index, previous, summary)
+
+        # Deliberately outside the "is this the first reading" branch above. Sessions
+        # are rebuilt on every device event, so the first reading of a session is
+        # routinely the one that reveals what changed while we were away -- skipping
+        # it is how a peer stayed invisible across exactly the reconnects that a KVM
+        # hop produces.
+        platform_index = record["platform_index"]
+        if record["platform_source"] == 1 and platform_index != self._wrote_platform:
             log.warning(
                 "device %d was switched to platform %s by hand (Fn+O / Fn+P); correcting it back",
                 self.index,
-                record["platform_index"],
+                platform_index,
+            )
+        elif (
+            record["platform_source"] == 3
+            and platform_index is not None
+            and self._wrote_platform is not None
+            and platform_index != self._wrote_platform
+        ):
+            # "host software" set it to something we did not write, so the software
+            # was on another machine. This is far stronger evidence than catching the
+            # write frame itself: on a shared receiver each host reliably sees the
+            # other's *reads* but not always its writes, so waiting to spot a
+            # setHostPlatform reply left the peer undetected and the fight running.
+            self.foreign_writes += 1
+            log.info(
+                "device %d platform was set to %s by software that is not us "
+                "(we wrote %s) -- another machine is driving this keyboard",
+                self.index,
+                platform_index,
+                self._wrote_platform,
             )
 
     def host_platform_detail(

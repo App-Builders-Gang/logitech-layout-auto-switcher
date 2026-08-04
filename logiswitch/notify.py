@@ -56,9 +56,10 @@ FLAPPING = "flapping"
 LINK = "link"
 INPUT_SOURCE = "input-source"
 STUCK_MODIFIER = "stuck-modifier"
+PEER = "peer"
 
 #: Kinds that describe an ongoing situation rather than a single event.
-STANDING = frozenset({FLAPPING, LINK, INPUT_SOURCE})
+STANDING = frozenset({FLAPPING, LINK, INPUT_SOURCE, PEER})
 
 #: Windows will not display a toast that has no Application User Model ID, and it
 #: fails silently when it does -- the most common way this feature ships broken.

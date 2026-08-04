@@ -88,6 +88,21 @@ def clean_trace():
     trace.set_echo(False)
 
 
+@pytest.fixture(autouse=True)
+def machine_in_use(monkeypatch):
+    """Pretend somebody is at this computer, for every test that does not say otherwise.
+
+    The agent gives the keyboard up when it has been idle *and* another machine is
+    competing for it. An unattended test run is idle by definition, so without this
+    the suite's behaviour would depend on whether a human happened to be typing
+    while it ran -- which is exactly the kind of test that passes on a laptop and
+    fails in CI. Tests about taking turns override it per agent.
+    """
+    from logiswitch import activity
+
+    monkeypatch.setattr(activity, "seconds_since_input", lambda: 0.0)
+
+
 @pytest.fixture
 def receiver(monkeypatch):
     """A Bolt receiver with an MX Master 3S and an MX Keys S, as on real hardware."""

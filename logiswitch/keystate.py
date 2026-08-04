@@ -34,13 +34,19 @@ log = logging.getLogger(__name__)
 #: is held, which is what actually decides the character a key produces.
 _COMBINED_SESSION_STATE = 0
 
-#: CGEventFlags masks. Only the ones a user can get stuck under.
+#: CGEventFlags masks for the modifiers a platform switch can strand.
+#:
+#: Fn is deliberately absent. It is not on the bottom row that a platform change
+#: remaps, so it cannot be stranded by one -- and macOS reports it set for reasons
+#: that have nothing to do with anyone holding a key (function-row and media keys
+#: carry the flag). Including it made the agent believe Fn had been held for thirty
+#: seconds and defer real corrections twice in as many minutes, on a keyboard that
+#: nobody was touching.
 _CG_FLAGS = {
     "shift": 0x00020000,
     "control": 0x00040000,
     "option": 0x00080000,
     "command": 0x00100000,
-    "fn": 0x00800000,
 }
 
 #: Virtual-key codes, paired so a left/right key reports under one name.

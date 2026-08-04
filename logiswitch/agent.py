@@ -216,6 +216,11 @@ class Agent:
         self._peer_sw_id: int | None = None
         #: When another machine was last seen writing. Per-agent, not global.
         self._peer_last_seen: float | None = None
+        #: Foreign-write total already adopted, so each is counted once.
+        self._foreign_seen = 0
+        #: Platform this agent last wrote per device, kept across session
+        #: rebuilds so a fresh device object still knows its own history.
+        self._last_written: dict[int, int] = {}
         #: Whether we are currently letting another machine have the keyboard.
         self._stood_down = False
         self.notifier = notify.Notifier(enabled=config.notify)
@@ -392,10 +397,42 @@ class Agent:
             )
         trace.anomaly(f"foreign setHostPlatform, swId 0x{sw_id:X}")
         self.notifier.send(
-            notify.FLAPPING,
+            notify.PEER,
             "Another computer is also setting this keyboard's layout. Whichever machine "
             "you are typing on should win -- if it keeps flapping, update logiswitch "
             "on the other machine.",
+        )
+
+    def _adopt_foreign_observations(self) -> None:
+        """Treat "the platform changed under us" as a peer sighting.
+
+        The frame-level detector only fires when another host's setHostPlatform
+        *reply* happens to reach us. On a shared receiver that is unreliable -- each
+        machine sees the other's reads far more often than its writes -- so the peer
+        went unnoticed and neither side ever stood down. The device layer already
+        works out that the platform was set by software that is not us; this adopts
+        that conclusion.
+        """
+        seen = sum(
+            device.foreign_writes for session in self._sessions for device, _ in session.supported
+        )
+        if seen <= self._foreign_seen:
+            return
+        self._foreign_seen = seen
+        self._peer_last_seen = time.monotonic()
+        trace.HEALTH.mark("foreign_platform_writes")
+        if self._foreign_warned:
+            return
+        self._foreign_warned = True
+        log.warning(
+            "another machine is setting this keyboard's platform. Whichever of you is "
+            "being typed on should win; if it keeps flapping, run `logiswitch doctor` "
+            "on both and check they are the same version."
+        )
+        self.notifier.send(
+            notify.PEER,
+            "Another computer is also setting this keyboard's layout. Whichever machine "
+            "you are typing on should win.",
         )
 
     def _peer_present(self) -> bool:
@@ -608,7 +645,7 @@ class Agent:
                 self.cfg.active_window,
             )
             self.notifier.send(
-                notify.FLAPPING,
+                notify.PEER,
                 "Another computer is using this keyboard, so its layout is being left "
                 "alone here. Type on this machine to take it back.",
             )
@@ -757,6 +794,8 @@ class Agent:
                 applied += 1
                 option = result.option
                 if result.changed:
+                    self._last_written[device.index] = option.index
+                if result.changed:
                     changed += 1
                     if result.confirmed is False:
                         # The read-back contradicted the write. Saying "switched"
@@ -805,6 +844,8 @@ class Agent:
                     if summary != self._last_summary:
                         log.info("%s already on %s", info.name, option.label)
                         self._last_summary = summary
+
+        self._adopt_foreign_observations()
 
         if changed:
             self._changes_in_a_row += 1
@@ -900,6 +941,7 @@ class Agent:
             self._hints[group.label] = [d.index for d, _ in session.supported]
             for device, info in session.supported:
                 device.claim_host(self.cfg.claim_host)
+                device.remember_last_write(self._last_written.get(device.index))
                 log.info(
                     "found %s on %s at index %d via %s",
                     info.name,

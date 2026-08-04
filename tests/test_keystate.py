@@ -131,3 +131,16 @@ def test_nothing_is_recorded_when_no_key_was_held(monkeypatch, receiver, tmp_pat
         agent.assert_once()
     assert "was held" not in caplog.text
     assert trace.HEALTH.get("switched_while_held") == 0
+
+
+def test_fn_is_not_treated_as_a_strandable_modifier():
+    """Fn is not on the row a platform switch remaps, and macOS over-reports it.
+
+    Including it made the agent believe Fn had been held for thirty seconds and
+    defer real corrections, on a keyboard nobody was touching.
+    """
+    assert "fn" not in keystate._CG_FLAGS
+    assert {"command", "option", "control", "shift"} == set(keystate._CG_FLAGS)
+    # The bit macOS uses for Fn must not register as anything held.
+    decoded = {name for name, mask in keystate._CG_FLAGS.items() if 0x00800000 & mask}
+    assert decoded == set()
