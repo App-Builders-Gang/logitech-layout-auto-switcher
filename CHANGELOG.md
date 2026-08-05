@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.5.0 — 2026-08-05
 
 A structural refactor: the large flat modules became focused packages. No
 runtime behaviour changes — every method moved verbatim and the full test suite
@@ -13,11 +13,27 @@ backend is gathered under `platform/`; and `doctor_report` plus the shared
 device-walking helpers moved out of `cli` into `doctor.py` and `endpoints.py`,
 which breaks the old `bundle` ↔ `cli` import cycle.
 
+### Added — back-compat deprecation shims
+
+The old import paths still work, so external code that imported the pre-refactor
+module layout keeps running — it just gets a `DeprecationWarning` naming the new
+location:
+
+- `logiswitch.paths` still imports (re-exports `logiswitch.platform.paths`).
+- `logiswitch.watchers` and its submodules (`base`, `windows`, `darwin`,
+  `polling`) still import (re-export `logiswitch.platform.watchers` and the
+  matching submodules).
+
+Each shim emits a `DeprecationWarning` at import time pointing at
+`logiswitch.platform`; migrate by switching to the new paths.
+
 ### Changed — internal module paths (breaking only for direct importers)
 
-- `logiswitch.paths` → `logiswitch.platform` (also at `logiswitch.platform.paths`).
+- `logiswitch.paths` → `logiswitch.platform` (also at `logiswitch.platform.paths`;
+  the old path still works via a deprecation shim, see above).
 - `logiswitch.watchers` → `logiswitch.platform.watchers` (`create_watcher`,
-  `Watcher`, `DeviceEvent` are also re-exported at `logiswitch.platform`).
+  `Watcher`, `DeviceEvent` are also re-exported at `logiswitch.platform`; the old
+  path still works via a deprecation shim, see above).
 - `logiswitch._wintoast` → `logiswitch.platform._wintoast` (private).
 
 Nothing the daemon, the installers, or the `logiswitch` command itself does is

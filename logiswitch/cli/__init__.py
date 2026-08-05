@@ -19,13 +19,10 @@ import logging
 import sys
 from pathlib import Path
 
-from .. import __version__, bundle, hidpp, notify, service, trace
-from ..agent import Agent, AgentConfig
-from ..doctor import doctor_report
-from ..endpoints import _device_lines, _endpoints, _require_endpoints
+from .. import __version__, hidpp, trace
+from ..agent import AgentConfig
 from ..hidpp import protocol as p
 from ..platform import (
-    default_target_os,
     doctor_report_path,
     is_managed,
     log_path,
@@ -43,25 +40,12 @@ from ._run import cmd_notify_test, cmd_watch
 #: command handlers themselves are wired into ``build_parser`` and are private.
 __all__ = [
     "GLOBAL_FLAG_DEFAULTS",
-    "_device_lines",
-    "_endpoints",
-    "_require_endpoints",
-    "Agent",
     "build_parser",
-    "bundle",
-    "default_target_os",
-    "doctor_report",
     "doctor_report_path",
     "hidpp",
-    "is_managed",
-    "log",
     "log_path",
     "main",
-    "notify",
-    "service",
-    "setup_logging",
     "state_path",
-    "trace",
     "trace_path",
 ]
 

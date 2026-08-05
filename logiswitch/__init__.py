@@ -5,5 +5,5 @@ currently driving it -- the programmatic equivalent of holding Fn+O / Fn+P,
 triggered automatically by OS device notifications.
 """
 
-__version__ = "2.4.0"
+__version__ = "2.5.0"
 __all__ = ["__version__"]
