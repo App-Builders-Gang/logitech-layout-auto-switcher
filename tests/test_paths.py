@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from logiswitch import paths
+from logiswitch.platform import paths
 
 
 @pytest.fixture

@@ -11,6 +11,7 @@ import fakehid
 import pytest
 
 from logiswitch import cli
+from logiswitch import doctor as doctor_module
 
 
 @pytest.fixture
@@ -18,10 +19,14 @@ def doctor(monkeypatch, tmp_path, receiver, capsys):
     """Run `doctor` with every file it touches redirected into a tmp dir."""
     monkeypatch.setattr(cli, "log_path", lambda: tmp_path / "logiswitch.log")
     monkeypatch.setattr(cli, "trace_path", lambda: tmp_path / "logiswitch.trace.log")
+    # doctor_report lives in the doctor module now, so it reads log_path/trace_path
+    # from there; cmd_doctor (in cli) writes to doctor_report_path from cli.
+    monkeypatch.setattr(doctor_module, "log_path", lambda: tmp_path / "logiswitch.log")
+    monkeypatch.setattr(doctor_module, "trace_path", lambda: tmp_path / "logiswitch.trace.log")
     monkeypatch.setattr(cli, "doctor_report_path", lambda: tmp_path / "report.txt")
-    monkeypatch.setattr(cli.service, "status", lambda: {"installed": False})
+    monkeypatch.setattr(doctor_module.service, "status", lambda: {"installed": False})
     monkeypatch.setattr(
-        cli.diagnostics,
+        doctor_module.diagnostics,
         "host_summary",
         lambda: {
             "input_source": "com.apple.keylayout.ABC",
@@ -58,7 +63,7 @@ def test_a_wrong_firmware_platform_is_named_as_symptom_one(doctor):
 def test_a_non_latin_input_source_is_named_as_symptom_two(monkeypatch, doctor):
     doctor.receiver.devices[fakehid.MX_KEYS_INDEX].platform = 1  # firmware is fine
     monkeypatch.setattr(
-        cli.diagnostics,
+        doctor_module.diagnostics,
         "host_summary",
         lambda: {
             "input_source": "com.apple.keylayout.Arabic",
@@ -78,7 +83,7 @@ def test_a_non_latin_input_source_is_named_as_symptom_two(monkeypatch, doctor):
 def test_competing_software_is_reported(monkeypatch, doctor):
     doctor.receiver.devices[fakehid.MX_KEYS_INDEX].platform = 1
     monkeypatch.setattr(
-        cli.diagnostics,
+        doctor_module.diagnostics,
         "host_summary",
         lambda: {
             "input_source": "com.apple.keylayout.ABC",
@@ -155,7 +160,7 @@ def test_a_receiver_that_will_not_open_is_not_reported_as_missing(monkeypatch, d
 def test_taking_turns_is_reported_once(monkeypatch, doctor):
     """Two lines saying opposite things is worse than either one alone."""
     monkeypatch.setattr(
-        cli.diagnostics,
+        doctor_module.diagnostics,
         "host_summary",
         lambda: {
             "input_source": "com.apple.keylayout.ABC",

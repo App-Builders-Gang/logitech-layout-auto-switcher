@@ -140,7 +140,7 @@ def test_macos_passes_the_text_as_arguments_never_as_script():
 
 def test_windows_passes_the_text_to_the_native_toast(monkeypatch):
     """The body still reaches the OS verbatim, now through the in-process COM call."""
-    from logiswitch import _wintoast
+    from logiswitch.platform import _wintoast
 
     captured = {}
 
@@ -164,7 +164,7 @@ def test_windows_toast_escapes_untrusted_text_into_xml():
     """
     from xml.etree import ElementTree
 
-    from logiswitch import _wintoast
+    from logiswitch.platform import _wintoast
 
     payload = _wintoast._toast_xml("logiswitch", HOSTILE)
     ElementTree.fromstring(payload)  # ill-formed XML would raise here
@@ -174,7 +174,7 @@ def test_windows_toast_escapes_untrusted_text_into_xml():
 
 def test_windows_toast_carries_an_application_id():
     """A toast with no AUMID does not display, and does not say why."""
-    from logiswitch import _wintoast
+    from logiswitch.platform import _wintoast
 
     assert _wintoast._APP_USER_MODEL_ID, "a registered AUMID must be set"
 

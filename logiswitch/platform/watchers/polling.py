@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import threading
 
-from ..hidpp import discovery
+from ...hidpp import discovery
 from .base import DeviceEvent, WatcherCallback
 
 log = logging.getLogger(__name__)

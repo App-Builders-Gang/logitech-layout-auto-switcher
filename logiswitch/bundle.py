@@ -27,8 +27,8 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from . import __version__, diagnostics, service
-from .paths import (
+from . import __version__, diagnostics, doctor, service
+from .platform import (
     APP_NAME,
     data_dir,
     doctor_report_path,
@@ -118,8 +118,6 @@ def _collect() -> tuple[list[tuple[str, Path]], list[str]]:
 
 def build(destination: Path | None = None, target_os: str | None = None) -> Path:
     """Write the diagnostics archive and return where it went."""
-    from .cli import doctor_report  # imported here: cli imports this module
-
     archive = Path(destination) if destination else default_destination()
     archive.parent.mkdir(parents=True, exist_ok=True)
 
@@ -147,7 +145,7 @@ def build(destination: Path | None = None, target_os: str | None = None) -> Path
         ]
 
     try:
-        report, _findings = doctor_report(target_os)
+        report, _findings = doctor.doctor_report(target_os)
     except Exception as exc:  # noqa: BLE001 - never let a probe failure lose the logs
         report = f"doctor failed to run: {exc}\n"
         log.debug("doctor failed while bundling", exc_info=True)

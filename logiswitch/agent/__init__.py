@@ -13,7 +13,6 @@ Threads, all of which sit in kernel waits when idle:
 from __future__ import annotations
 
 import contextlib
-import json
 import logging
 import queue
 import random
@@ -24,9 +23,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
-from . import activity, diagnostics, hidpp, keystate, notify, trace
-from .hidpp import protocol as p
-from .watchers import DeviceEvent, Watcher, create_watcher
+# ``activity`` is re-exported: no Core method uses it directly now that
+# ``_idle_seconds`` lives on the arbitration mixin, but the test suite reaches it
+# as ``agent_module.activity`` (and patches attributes on that module object).
+from .. import activity as activity
+from .. import diagnostics, hidpp, keystate, notify, trace
+from ..hidpp import protocol as p
+from ..platform import DeviceEvent, Watcher, create_watcher
 
 log = logging.getLogger(__name__)
 
@@ -179,7 +182,15 @@ class Session:
         self.transport.close()
 
 
-class Agent:
+# Imported after the constants, AgentConfig and Session are defined above: each
+# mixin pulls the names it needs (module-level constants, and ``Session`` for
+# ``_build_sessions``) from this package's namespace at import time. E402
+# (import not at top of file) is inherent to this split.
+from ._arbitration import _ArbitrationMixin  # noqa: E402
+from ._sessions import _SessionMixin  # noqa: E402
+
+
+class Agent(_ArbitrationMixin, _SessionMixin):
     def __init__(self, config: AgentConfig):
         self.cfg = config
         self._queue: queue.Queue = queue.Queue(maxsize=256)
@@ -282,7 +293,7 @@ class Agent:
             log.warning(
                 "%s watcher failed to start (%s); falling back to polling", self._watcher.name, exc
             )
-            from .watchers.polling import PollingWatcher
+            from ..platform.watchers.polling import PollingWatcher
 
             self._watcher = PollingWatcher(self.cfg.vendor_id)
             self._watcher.start(self._on_device_event)
@@ -371,164 +382,6 @@ class Agent:
             # anything: we are mid-retry precisely because the keyboard was away,
             # and that is the moment its return matters most.
             self._put((_Event.DEVICE_WOKE, index))
-
-    def _note_foreign_write(self, frame: bytes) -> None:
-        """Another host is setting this keyboard's platform too.
-
-        A ``setHostPlatform`` reply that no request of ours was waiting for did not
-        come from us -- and because a shared receiver delivers device traffic to
-        whoever is listening, it is visible even though the writer is on a different
-        machine. Two hosts that want different platforms for one keyboard cannot
-        both win, and the loser is whoever typed last.
-
-        Crucially this *stops* the close re-checking. Racing an opponent that writes
-        every few seconds would turn a slow tug-of-war into a fast one, hammering the
-        RF link for a fight neither side can win. Say so plainly instead.
-        """
-        trace.HEALTH.mark("foreign_platform_writes")  # observability
-        self._peer_last_seen = time.monotonic()  # the decision reads this
-        sw_id = frame[3] & 0x0F
-        self._peer_sw_id = sw_id
-        if self._foreign_warned:
-            return
-        self._foreign_warned = True
-        rivals = self._local_rival()
-        if rivals:
-            # Do not assert "another machine" when a program on this one explains it
-            # just as well. Naming both possibilities is the honest report, and the
-            # advice is the same either way.
-            log.warning(
-                "this keyboard's platform is being set by software that is not us "
-                "(software id 0x%02X). %s %s running here, so it may be that rather "
-                "than another machine. Correcting it back to %s.",
-                sw_id,
-                " and ".join(rivals),
-                "is" if len(rivals) == 1 else "are",
-                self.cfg.target_os,
-            )
-            trace.anomaly(f"foreign setHostPlatform, swId 0x{sw_id:X}, local rivals present")
-            return
-        if sw_id == p.SW_ID:
-            # Our own former fixed software id: the peer is an old build of this very
-            # tool, which will not stand down for anyone. Saying so is the single most
-            # useful sentence this log can print during a staged upgrade.
-            log.warning(
-                "another machine is running an OLD logiswitch (software id 0x%02X) and "
-                "setting this keyboard's platform. Old builds do not take turns -- "
-                "update logiswitch on that machine and the two will share properly.",
-                sw_id,
-            )
-        else:
-            log.warning(
-                "another machine is setting this keyboard's platform (software id "
-                "0x%02X). Whichever of you is being typed on should win; if the layout "
-                "still fights, run `logiswitch doctor` on both.",
-                sw_id,
-            )
-        trace.anomaly(f"foreign setHostPlatform, swId 0x{sw_id:X}")
-        self.notifier.send(
-            notify.PEER,
-            "Another computer is also setting this keyboard's layout. Whichever machine "
-            "you are typing on should win -- if it keeps flapping, update logiswitch "
-            "on the other machine.",
-        )
-
-    def _adopt_foreign_observations(self) -> None:
-        """Treat "the platform changed under us" as a peer sighting.
-
-        The frame-level detector only fires when another host's setHostPlatform
-        *reply* happens to reach us. On a shared receiver that is unreliable -- each
-        machine sees the other's reads far more often than its writes -- so the peer
-        went unnoticed and neither side ever stood down. The device layer already
-        works out that the platform was set by software that is not us; this adopts
-        that conclusion.
-        """
-        seen = sum(
-            device.foreign_writes for session in self._sessions for device, _ in session.supported
-        )
-        if seen <= self._foreign_seen:
-            return
-        self._foreign_seen = seen
-        self._peer_last_seen = time.monotonic()
-        trace.HEALTH.mark("foreign_platform_writes")
-        if self._foreign_warned:
-            return
-        self._foreign_warned = True
-        rivals = self._local_rival()
-        if rivals:
-            log.warning(
-                "this keyboard's platform was set by software that is not us. %s %s "
-                "running here, so it may be that rather than another machine. "
-                "Correcting it back to %s.",
-                " and ".join(rivals),
-                "is" if len(rivals) == 1 else "are",
-                self.cfg.target_os,
-            )
-            return
-        log.warning(
-            "another machine is setting this keyboard's platform. Whichever of you is "
-            "being typed on should win; if it keeps flapping, run `logiswitch doctor` "
-            "on both and check they are the same version."
-        )
-        self.notifier.send(
-            notify.PEER,
-            "Another computer is also setting this keyboard's layout. Whichever machine "
-            "you are typing on should win.",
-        )
-
-    def _peer_present(self) -> bool:
-        """Has another machine written to this keyboard recently?
-
-        Per-agent state on purpose. The obvious implementation reads the process-wide
-        ``trace.HEALTH`` counter, which is fine for the one-agent-per-machine reality
-        but makes every agent in a shared process believe it saw what its neighbours
-        saw -- which is precisely the situation the multi-machine tests create.
-        """
-        if self._peer_last_seen is None:
-            return False
-        return (time.monotonic() - self._peer_last_seen) < PEER_MEMORY
-
-    def _idle_seconds(self) -> float | None:
-        """Seconds since this machine was last used, or None if unknowable.
-
-        A seam: the module function answers for the whole process, so several agents
-        sharing one interpreter need a per-instance override to model separate
-        machines. Also the single place any future ownership policy would hook into.
-        """
-        return activity.seconds_since_input()
-
-    def _note_link(self, index: int, established: bool) -> None:
-        """Track how often the wireless link comes and goes.
-
-        This is the only handle the daemon has on garbled or repeated characters:
-        it never sees a keystroke, but a link that keeps collapsing and
-        re-establishing is a link dropping and repeating them. Counting the churn
-        turns "the keyboard sometimes types nonsense" into a number.
-        """
-        log.debug("device %d link %s", index, "up" if established else "down")
-        if not established:
-            trace.HEALTH.bump("link_drops")
-            return
-        trace.HEALTH.note_reconnect()
-        recent = trace.HEALTH.churn(CHURN_WINDOW)
-        if recent < CHURN_THRESHOLD:
-            self._churn_warned = False
-            return
-        if not self._churn_warned:
-            self._churn_warned = True
-            log.warning(
-                "the wireless link has re-established %d times in %.0fs -- that is "
-                "interference, a low battery or a failing receiver, and it drops and "
-                "repeats keystrokes regardless of which layout the keyboard is in",
-                recent,
-                CHURN_WINDOW,
-            )
-            trace.anomaly(f"link churn: {recent} reconnects in {CHURN_WINDOW:.0f}s")
-            self.notifier.send(
-                notify.LINK,
-                f"The keyboard's wireless link is unstable -- {recent} reconnects in "
-                f"{CHURN_WINDOW:.0f}s. That drops and repeats keystrokes.",
-            )
 
     def _put(self, item: tuple) -> None:
         try:
@@ -634,109 +487,6 @@ class Agent:
 
         self._teardown_sessions("worker exiting")
 
-    def _unsettled(self) -> bool:
-        """Is the device still proving it will keep what it was told?
-
-        True right after a correction and until it has read back correctly
-        :data:`SETTLED_CHECKS` times running. While true the agent re-checks at
-        :data:`FAST_RECHECK`, which is what keeps a keyboard that drops the setting
-        every few seconds usable rather than wrong half the time.
-        """
-        if self._peer_present() and not self._local_rival():
-            # Another machine is writing too. Re-checking twice a second would just
-            # make the tug-of-war faster; neither of us can win it that way.
-            #
-            # Only when it really is another machine. If Logi Options+ is running
-            # here, the same evidence is equally explained by it -- and easing off
-            # against a device that keeps dropping the setting is precisely backwards:
-            # close re-checking is the only thing that keeps such a keyboard usable.
-            return False
-        return self._clean_checks < SETTLED_CHECKS
-
-    def _local_rival(self) -> list[str]:
-        """Logitech software running on this machine, cached.
-
-        Listing processes is a subprocess call, so the answer is reused for
-        :data:`RIVAL_RECHECK`. Nothing here is time-critical: this only ever decides
-        whether ambiguous evidence is allowed to make us yield.
-        """
-        now = time.monotonic()
-        if not self._rivals_checked or now - self._rivals_checked >= RIVAL_RECHECK:
-            self._rivals_checked = now
-            self._rivals = diagnostics.competing_software()
-        return self._rivals
-
-    def _standing_down(self) -> bool:
-        """Should this machine leave the keyboard alone right now?
-
-        Only ever true when *all* of these hold: another machine is competing for the
-        keyboard, this platform can actually measure whether it is being used, and it
-        has not been used for a while. Any one of them missing means behave exactly as
-        a single machine would -- a lone agent must never stop correcting just because
-        nobody has typed for a minute.
-
-        And never on evidence a program on *this* machine could have produced. Taking
-        turns is a bargain between machines: yielding is right because somebody is
-        typing on the other one. No such person exists behind Logi Options+, so
-        yielding to it means going quiet and staying quiet for as long as nobody
-        touches this keyboard -- which is exactly when the layout needs to be right
-        for the next person who does. The protocol cannot tell the two apart: a
-        platform set by "host software" says only that, and the peer detectors
-        (:meth:`_note_foreign_write`, :meth:`_adopt_foreign_observations`) conclude
-        "another machine" from evidence a local rival satisfies equally well. So when
-        one is running, ambiguity resolves to correcting rather than surrendering --
-        and sustained fighting is reported by :meth:`_warn_about_contention`, which
-        is the response that actually helps.
-        """
-        if self.cfg.observe:
-            return True
-        if not self._peer_present():
-            return False
-        rivals = self._local_rival()
-        if rivals:
-            if not self._rival_warned:
-                self._rival_warned = True
-                log.info(
-                    "not standing down: the platform is being set by software that is "
-                    "not us, but %s %s running here, so this cannot be attributed to "
-                    "another machine. Holding %s and correcting as usual.",
-                    " and ".join(rivals),
-                    "is" if len(rivals) == 1 else "are",
-                    self.cfg.target_os,
-                )
-            return False
-        idle = self._idle_seconds()
-        if idle is None:
-            # No way to prove we are in use; gating here would stand down forever.
-            if not self._no_arbitration_warned:
-                self._no_arbitration_warned = True
-                log.warning(
-                    "another machine is competing for this keyboard, but this platform "
-                    "cannot report input activity -- taking turns automatically is not "
-                    "possible here. Use --observe on whichever machine should yield."
-                )
-            return False
-        return idle > self.cfg.active_window
-
-    def _note_arbitration(self, standing_down: bool) -> None:
-        """Log the change of turn once, not once per pass."""
-        if standing_down == self._stood_down:
-            return
-        self._stood_down = standing_down
-        if standing_down:
-            log.info(
-                "standing down: another machine is using this keyboard and this one "
-                "has been idle for over %.0fs",
-                self.cfg.active_window,
-            )
-            self.notifier.send(
-                notify.PEER,
-                "Another computer is using this keyboard, so its layout is being left "
-                "alone here. Type on this machine to take it back.",
-            )
-        else:
-            log.info("taking the keyboard back: this machine is in use again")
-
     def _hold_off(self) -> set[str] | None:
         """Modifiers to wait for, or None to go ahead now.
 
@@ -744,6 +494,11 @@ class Agent:
         at that point the modifier is stuck rather than being used, and continuing
         to defer would leave the layout wrong indefinitely for the sake of a key
         nobody is pressing.
+
+        Lives on ``Agent`` (not ``_ArbitrationMixin``) because its body reads
+        ``MAX_DEFER`` as a module global and the test suite rebinds that name on
+        the ``logiswitch.agent`` module; a ``LOAD_GLOBAL`` only consults the dict
+        of the module the function was defined in.
         """
         held = keystate.modifiers_held()
         if not held:
@@ -782,6 +537,23 @@ class Agent:
         )
         return None
 
+    def _peer_present(self) -> bool:
+        """Has another machine written to this keyboard recently?
+
+        Per-agent state on purpose. The obvious implementation reads the process-wide
+        ``trace.HEALTH`` counter, which is fine for the one-agent-per-machine reality
+        but makes every agent in a shared process believe it saw what its neighbours
+        saw -- which is precisely the situation the multi-machine tests create.
+
+        Lives on ``Agent`` (not ``_ArbitrationMixin``) because its body reads
+        ``PEER_MEMORY`` as a module global and the test suite rebinds that name on
+        the ``logiswitch.agent`` module; a ``LOAD_GLOBAL`` only consults the dict
+        of the module the function was defined in.
+        """
+        if self._peer_last_seen is None:
+            return False
+        return (time.monotonic() - self._peer_last_seen) < PEER_MEMORY
+
     def _log_steady_summary(self) -> None:
         """Say what is true right now, whether or not anything changed.
 
@@ -808,24 +580,6 @@ class Agent:
             diagnostics.describe_host(),
             peer,
         )
-
-    def _note_presence(self, reachable: bool) -> None:
-        """Log the gap while nothing answered.
-
-        Without this the log shows a switch happening but never says how long the
-        layout was wrong, which is the one number that matters when a KVM round
-        trip feels slow.
-        """
-        if reachable:
-            if self._absent_since is not None:
-                log.info(
-                    "device(s) answering again after %.1fs away",
-                    time.monotonic() - self._absent_since,
-                )
-                self._absent_since = None
-        elif self._absent_since is None:
-            self._absent_since = time.monotonic()
-            log.info("nothing is answering; waiting for a device to come back")
 
     # -- the actual work ------------------------------------------------------
 
@@ -964,140 +718,3 @@ class Agent:
                 self._contention_warned = False
 
         return applied > 0 and failed == 0
-
-    def _warn_about_contention(self, recent: int) -> None:
-        """Name the other process rather than assuming which one it is.
-
-        This warning used to assert Logi Options+ was the culprit without ever
-        looking, which sent people uninstalling software that was not running while
-        the real cause went unexamined.
-        """
-        rivals = diagnostics.competing_software()
-        if rivals:
-            log.warning(
-                "corrected the platform %d times in the last %.0f minutes, and %s %s "
-                "running -- that software enforces its own host OS on this collection. "
-                "Quit or uninstall it if the layout will not stay on %s.",
-                recent,
-                REVERT_WINDOW / 60,
-                ", ".join(rivals),
-                "is" if len(rivals) == 1 else "are",
-                self.cfg.target_os,
-            )
-        else:
-            log.warning(
-                "corrected the platform %d times in the last %.0f minutes and no other "
-                "Logitech software is running. Run `logiswitch doctor`, and see the "
-                "frame trace for what the keyboard reports between writes.",
-                recent,
-                REVERT_WINDOW / 60,
-            )
-        trace.anomaly(f"platform corrected {recent} times in {REVERT_WINDOW:.0f}s")
-        # Deliberately hung off the same branch as the warning above, so the desktop
-        # and the log can never tell different stories about the same condition.
-        self.notifier.send(
-            notify.FLAPPING,
-            f"The keyboard layout keeps reverting -- corrected {recent} times in "
-            f"{REVERT_WINDOW / 60:.0f} minutes. Run: logiswitch doctor",
-        )
-
-    def _build_sessions(self) -> None:
-        groups = hidpp.find_groups(self.cfg.vendor_id)
-        if not groups:
-            return
-        for group in groups:
-            try:
-                transport = hidpp.open_transport(group)
-            except Exception as exc:
-                log.debug("cannot open %s: %s", group, exc)
-                continue
-            session = Session(group=group, transport=transport)
-            transport.on_notification = self._on_hidpp_frame
-            try:
-                devices = hidpp.discover_devices(transport, hint=self._hints.get(group.label))
-                session.devices = hidpp.probe_devices(devices)
-            except Exception as exc:
-                log.debug("discovery failed on %s: %s", group, exc)
-                transport.close()
-                continue
-            if not session.supported:
-                # Nothing here can switch platform (a mouse-only receiver, say).
-                # Keep no handle open for it.
-                names = ", ".join(i.name for _, i in session.devices) or "no devices"
-                log.debug("%s has nothing to drive (%s)", group, names)
-                transport.close()
-                continue
-            self._hints[group.label] = [d.index for d, _ in session.supported]
-            for device, info in session.supported:
-                device.claim_host(self.cfg.claim_host)
-                device.remember_last_write(self._last_written.get(device.index))
-                log.info(
-                    "found %s on %s at index %d via %s",
-                    info.name,
-                    group.label,
-                    device.index,
-                    info.kind,
-                )
-            self._sessions.append(session)
-        self._refresh_driven()
-        self._save_hints()
-
-    def _refresh_driven(self) -> None:
-        self._driven = frozenset(
-            device.index for session in self._sessions for device, _info in session.supported
-        )
-        features: dict[int, int] = {}
-        for session in self._sessions:
-            for device, info in session.supported:
-                if info.feature != p.FEATURE_MULTIPLATFORM:
-                    continue
-                try:
-                    features[device.index] = device.feature_index(p.FEATURE_MULTIPLATFORM)
-                except Exception:  # cached lookup; a failure here is not worth raising
-                    log.debug("no platform feature index for device %d", device.index)
-        self._platform_features = features
-
-    def _teardown_sessions(self, reason: str) -> None:
-        if not self._sessions:
-            return
-        # _driven deliberately survives: a frame already in flight when we close
-        # arrives just after, and dropping it loses a real platform-change event.
-        # Device indices are stable per receiver, so a stale entry is harmless.
-        log.debug("closing %d session(s): %s", len(self._sessions), reason)
-        for session in self._sessions:
-            try:
-                session.close()
-            except Exception:
-                log.debug("error closing session", exc_info=True)
-        self._sessions.clear()
-
-    # -- device index hints ---------------------------------------------------
-
-    def _load_hints(self) -> dict[str, list[int]]:
-        """Device indices seen last time, per receiver.
-
-        Tolerates the older on-disk form, a bare integer per receiver, so an upgrade
-        does not throw away the fast path or crash on the state file.
-        """
-        path = self.cfg.state_file
-        if not path or not path.exists():
-            return {}
-        try:
-            data = json.loads(path.read_text("utf-8"))
-            hints = {}
-            for label, value in data.get("hints", {}).items():
-                indices = [value] if isinstance(value, int) else list(value)
-                hints[str(label)] = [int(i) for i in indices]
-            return hints
-        except Exception:
-            return {}
-
-    def _save_hints(self) -> None:
-        path = self.cfg.state_file
-        if not path or not self._hints:
-            return
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps({"hints": self._hints}, indent=2), "utf-8")
-        except Exception as exc:
-            log.debug("could not save hints: %s", exc)
