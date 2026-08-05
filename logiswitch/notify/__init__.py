@@ -30,7 +30,7 @@ import threading
 import time
 from typing import Callable, NamedTuple
 
-from .paths import is_macos, is_windows
+from ..paths import is_macos, is_windows
 
 log = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ PEER = "peer"
 STANDING = frozenset({FLAPPING, LINK, INPUT_SOURCE, PEER})
 
 #: Windows toasts are raised in-process through the WinRT COM API (see
-#: ``_wintoast``): no ``powershell`` is spawned, and the title and body go into XML
+#: ``_windows``): no ``powershell`` is spawned, and the title and body go into XML
 #: built on the Python side, so there is no command line for them to escape into.
 
 #: Constant AppleScript reading its text from ``argv``. Passing the message as an
@@ -111,7 +111,7 @@ def _send_macos(note: Notification) -> None:
 def _send_windows(note: Notification) -> None:
     # Imported lazily so non-Windows platforms never touch ``ctypes``'s WinDLL and
     # the COM plumbing stays in one module.
-    from ._wintoast import show_toast
+    from ._windows import show_toast
 
     show_toast(note.title, note.body)
 
