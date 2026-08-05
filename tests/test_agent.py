@@ -6,7 +6,7 @@ import pytest
 
 from logiswitch import diagnostics
 from logiswitch.agent import Agent, AgentConfig
-from logiswitch.watchers import DeviceEvent
+from logiswitch.platform.watchers import DeviceEvent
 
 
 def config(tmp_path, **kwargs):

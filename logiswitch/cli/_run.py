@@ -11,7 +11,7 @@ import sys
 from .. import notify
 from ..agent import Agent, AgentConfig
 from ..hidpp import protocol as p
-from ..paths import default_target_os
+from ..platform import default_target_os
 
 log = logging.getLogger("logiswitch")
 

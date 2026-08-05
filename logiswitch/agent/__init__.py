@@ -29,7 +29,7 @@ from pathlib import Path
 from .. import activity as activity
 from .. import diagnostics, hidpp, keystate, notify, trace
 from ..hidpp import protocol as p
-from ..watchers import DeviceEvent, Watcher, create_watcher
+from ..platform import DeviceEvent, Watcher, create_watcher
 
 log = logging.getLogger(__name__)
 
@@ -293,7 +293,7 @@ class Agent(_ArbitrationMixin, _SessionMixin):
             log.warning(
                 "%s watcher failed to start (%s); falling back to polling", self._watcher.name, exc
             )
-            from ..watchers.polling import PollingWatcher
+            from ..platform.watchers.polling import PollingWatcher
 
             self._watcher = PollingWatcher(self.cfg.vendor_id)
             self._watcher.start(self._on_device_event)

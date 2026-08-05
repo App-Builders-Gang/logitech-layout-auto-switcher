@@ -140,7 +140,7 @@ def test_macos_passes_the_text_as_arguments_never_as_script():
 
 def test_windows_passes_the_text_to_the_native_toast(monkeypatch):
     """The body still reaches the OS verbatim, now through the in-process COM call."""
-    from logiswitch.notify import _windows
+    from logiswitch.platform import _wintoast
 
     captured = {}
 
@@ -148,7 +148,7 @@ def test_windows_passes_the_text_to_the_native_toast(monkeypatch):
         captured["title"] = title
         captured["body"] = body
 
-    monkeypatch.setattr(_windows, "show_toast", fake_show)
+    monkeypatch.setattr(_wintoast, "show_toast", fake_show)
     notify._send_windows(notify.Notification(notify.SWITCHED, HOSTILE))
 
     assert captured["title"] == "logiswitch"
@@ -164,9 +164,9 @@ def test_windows_toast_escapes_untrusted_text_into_xml():
     """
     from xml.etree import ElementTree
 
-    from logiswitch.notify import _windows
+    from logiswitch.platform import _wintoast
 
-    payload = _windows._toast_xml("logiswitch", HOSTILE)
+    payload = _wintoast._toast_xml("logiswitch", HOSTILE)
     ElementTree.fromstring(payload)  # ill-formed XML would raise here
     assert HOSTILE not in payload, "the raw body must not survive unescaped"
     assert "&amp;" in payload, "the ampersands in HOSTILE are escaped"
@@ -174,9 +174,9 @@ def test_windows_toast_escapes_untrusted_text_into_xml():
 
 def test_windows_toast_carries_an_application_id():
     """A toast with no AUMID does not display, and does not say why."""
-    from logiswitch.notify import _windows
+    from logiswitch.platform import _wintoast
 
-    assert _windows._APP_USER_MODEL_ID, "a registered AUMID must be set"
+    assert _wintoast._APP_USER_MODEL_ID, "a registered AUMID must be set"
 
 
 # -- lifecycle ----------------------------------------------------------------

@@ -13,8 +13,8 @@ import time
 
 import pytest
 
-from logiswitch.watchers import DeviceEvent, create_watcher
-from logiswitch.watchers.polling import PollingWatcher
+from logiswitch.platform.watchers import DeviceEvent, create_watcher
+from logiswitch.platform.watchers.polling import PollingWatcher
 
 windows_only = pytest.mark.skipif(platform.system() != "Windows", reason="Windows only")
 macos_only = pytest.mark.skipif(platform.system() != "Darwin", reason="macOS only")
@@ -23,11 +23,11 @@ macos_only = pytest.mark.skipif(platform.system() != "Darwin", reason="macOS onl
 def _native_watcher_module():
     """The module and attribute name of this platform's native watcher, if any."""
     if platform.system() == "Windows":
-        from logiswitch.watchers import windows
+        from logiswitch.platform.watchers import windows
 
         return windows, "WindowsWatcher"
     if platform.system() == "Darwin":
-        from logiswitch.watchers import darwin
+        from logiswitch.platform.watchers import darwin
 
         return darwin, "DarwinWatcher"
     return None, ""
@@ -145,7 +145,7 @@ def test_agent_falls_back_when_the_watcher_fails_to_start(monkeypatch, receiver,
 
 @windows_only
 def test_cm_notify_filter_matches_the_documented_size():
-    from logiswitch.watchers.windows import CM_NOTIFY_FILTER, WindowsWatcher
+    from logiswitch.platform.watchers.windows import CM_NOTIFY_FILTER, WindowsWatcher
 
     watcher = WindowsWatcher(0x046D)
     assert watcher._filter.cbSize == ctypes.sizeof(CM_NOTIFY_FILTER)
@@ -156,7 +156,7 @@ def test_cm_notify_filter_matches_the_documented_size():
 
 @windows_only
 def test_callback_decodes_the_symbolic_link_and_filters_by_vendor():
-    from logiswitch.watchers.windows import (
+    from logiswitch.platform.watchers.windows import (
         _SYMLINK_OFFSET,
         CM_NOTIFY_ACTION_DEVICEINTERFACEARRIVAL,
         CM_NOTIFY_ACTION_DEVICEINTERFACEREMOVAL,
@@ -190,7 +190,7 @@ def test_callback_decodes_the_symbolic_link_and_filters_by_vendor():
 
 @windows_only
 def test_registration_round_trip_against_the_real_api():
-    from logiswitch.watchers.windows import WindowsWatcher
+    from logiswitch.platform.watchers.windows import WindowsWatcher
 
     watcher = WindowsWatcher(0x046D)
     watcher.start(lambda *a: None)
@@ -205,7 +205,7 @@ def test_registration_round_trip_against_the_real_api():
 @windows_only
 def test_the_native_callback_stays_referenced_while_registered():
     """Windows holds a raw pointer to it; letting Python collect it faults the process."""
-    from logiswitch.watchers.windows import WindowsWatcher
+    from logiswitch.platform.watchers.windows import WindowsWatcher
 
     watcher = WindowsWatcher(0x046D)
     assert watcher._native_callback is not None
@@ -217,7 +217,7 @@ def test_the_native_callback_stays_referenced_while_registered():
 
 @macos_only
 def test_iokit_frameworks_load_and_expose_what_we_call():
-    from logiswitch.watchers.darwin import _Frameworks
+    from logiswitch.platform.watchers.darwin import _Frameworks
 
     frameworks = _Frameworks()
 
@@ -228,7 +228,7 @@ def test_iokit_frameworks_load_and_expose_what_we_call():
 
 @macos_only
 def test_matching_dictionary_is_built_for_the_vendor():
-    from logiswitch.watchers.darwin import DarwinWatcher
+    from logiswitch.platform.watchers.darwin import DarwinWatcher
 
     watcher = DarwinWatcher(0x046D)
     matching = watcher._matching_dict()
@@ -241,7 +241,7 @@ def test_matching_dictionary_is_built_for_the_vendor():
 def test_the_terminate_notification_name_is_the_one_iokit_accepts():
     """Registering "IOServiceTerminated" returned kIOReturnUnsupported and silently
     disabled the whole watcher; IOKitKeys.h spells it without the trailing 'd'."""
-    from logiswitch.watchers import darwin
+    from logiswitch.platform.watchers import darwin
 
     assert darwin.kIOTerminatedNotification == b"IOServiceTerminate"
     assert darwin.kIOMatchedNotification == b"IOServiceMatched"
@@ -251,7 +251,7 @@ def test_the_terminate_notification_name_is_the_one_iokit_accepts():
 def test_iokit_registration_round_trip_against_the_real_api():
     """Start and stop the real watcher. No Logitech hardware needed -- registering
     for notifications is registry discovery, not device access."""
-    from logiswitch.watchers.darwin import DarwinWatcher
+    from logiswitch.platform.watchers.darwin import DarwinWatcher
 
     watcher = DarwinWatcher(0x046D)
     watcher.start(lambda *a: None)
@@ -267,7 +267,7 @@ def test_iokit_registration_round_trip_against_the_real_api():
 
 @macos_only
 def test_the_iokit_callbacks_stay_referenced():
-    from logiswitch.watchers.darwin import DarwinWatcher
+    from logiswitch.platform.watchers.darwin import DarwinWatcher
 
     watcher = DarwinWatcher(0x046D)
 

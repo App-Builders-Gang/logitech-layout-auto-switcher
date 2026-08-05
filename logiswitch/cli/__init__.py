@@ -24,7 +24,7 @@ from ..agent import Agent, AgentConfig
 from ..doctor import doctor_report
 from ..endpoints import _device_lines, _endpoints, _require_endpoints
 from ..hidpp import protocol as p
-from ..paths import (
+from ..platform import (
     default_target_os,
     doctor_report_path,
     is_managed,

@@ -23,7 +23,7 @@ from . import __version__, activity, diagnostics, notify, service, trace
 from . import agent as agent_module
 from .endpoints import _device_lines, _endpoints
 from .hidpp import protocol as p
-from .paths import default_target_os, log_path, trace_path
+from .platform import default_target_os, log_path, trace_path
 
 #: Frames from the ring included in a report. Enough to cover a check-and-correct
 #: pass and whatever preceded it, without burying the verdict.

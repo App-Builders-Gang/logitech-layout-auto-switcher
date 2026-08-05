@@ -26,7 +26,7 @@ import ctypes
 import ctypes.util
 import logging
 
-from .paths import is_macos, is_windows
+from .platform import is_macos, is_windows
 
 log = logging.getLogger(__name__)
 

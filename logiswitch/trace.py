@@ -145,7 +145,7 @@ _dump_path: Path | None = None
 def set_dump_path(path: Path | None) -> None:
     """Where :func:`anomaly` flushes to. Unset means keep the ring in memory only.
 
-    The CLI points this at :func:`logiswitch.paths.trace_path`; leaving it unset
+    The CLI points this at :func:`logiswitch.platform.trace_path`; leaving it unset
     keeps the protocol layer free of any opinion about the filesystem, which is
     also what lets the tests exercise it without writing anywhere.
     """

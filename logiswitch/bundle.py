@@ -28,7 +28,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import __version__, diagnostics, doctor, service
-from .paths import (
+from .platform import (
     APP_NAME,
     data_dir,
     doctor_report_path,

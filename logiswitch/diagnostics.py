@@ -21,7 +21,7 @@ import logging
 import subprocess
 from typing import Callable
 
-from .paths import is_macos, is_windows
+from .platform import is_macos, is_windows
 
 log = logging.getLogger(__name__)
 

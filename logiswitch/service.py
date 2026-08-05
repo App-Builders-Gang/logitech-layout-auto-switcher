@@ -20,7 +20,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from .paths import (
+from .platform import (
     APP_NAME,
     LEGACY_TASK_NAME,
     MANAGED_ENV_VAR,
