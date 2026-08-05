@@ -26,28 +26,7 @@ import threading
 import xml.sax.saxutils
 from typing import Any
 
-
-class _GUID(ctypes.Structure):
-    _fields_ = [
-        ("Data1", ctypes.c_ulong),
-        ("Data2", ctypes.c_ushort),
-        ("Data3", ctypes.c_ushort),
-        ("Data4", ctypes.c_ubyte * 8),
-    ]
-
-
-def _guid(literal: str) -> _GUID:
-    """Parse a ``D1-D2-D3-D4-D5`` string into the struct ``combase`` expects."""
-    parts = literal.split("-")
-    rest = parts[3] + parts[4]  # 16 hex chars = the 8 bytes of Data4
-    data4 = bytes(int(rest[i : i + 2], 16) for i in range(0, 16, 2))
-    return _GUID(
-        int(parts[0], 16),
-        int(parts[1], 16),
-        int(parts[2], 16),
-        (ctypes.c_ubyte * 8)(*data4),
-    )
-
+from ._comtypes import _GUID, _guid
 
 # Interface GUIDs, copied from the Windows SDK IDL (see module docstring).
 _IID_IXML_DOCUMENT_IO = _guid("6CD0E74E-EE65-4489-9EBF-CA43E87BA637")

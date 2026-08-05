@@ -13,6 +13,7 @@ import ctypes
 import logging
 from ctypes import wintypes
 
+from .._comtypes import _GUID, _guid
 from .base import DeviceEvent, WatcherCallback
 
 log = logging.getLogger(__name__)
@@ -30,26 +31,11 @@ ERROR_SUCCESS = 0
 #: FilterType (4) + Reserved (4) + ClassGuid (16).
 _SYMLINK_OFFSET = 24
 
-
-class GUID(ctypes.Structure):
-    _fields_ = [
-        ("Data1", wintypes.DWORD),
-        ("Data2", wintypes.WORD),
-        ("Data3", wintypes.WORD),
-        ("Data4", ctypes.c_ubyte * 8),
-    ]
-
-
-GUID_DEVINTERFACE_HID = GUID(
-    0x4D1E55B2,
-    0xF16F,
-    0x11CF,
-    (ctypes.c_ubyte * 8)(0x88, 0xCB, 0x00, 0x11, 0x11, 0x00, 0x00, 0x30),
-)
+GUID_DEVINTERFACE_HID = _guid("4D1E55B2-F16F-11CF-88CB-001111000030")
 
 
 class _FilterDeviceInterface(ctypes.Structure):
-    _fields_ = [("ClassGuid", GUID)]
+    _fields_ = [("ClassGuid", _GUID)]
 
 
 class _FilterDeviceHandle(ctypes.Structure):
