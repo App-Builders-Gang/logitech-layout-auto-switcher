@@ -68,13 +68,15 @@ is what keeps the protocol layer honest.
 
 ```
 logiswitch/
-  hidpp/protocol.py    framing, error decoding, OS masks — pure, fully unit-tested
-  hidpp/transport.py   handles + one reader thread each + request/notification dispatch
-  hidpp/device.py      capability probing and the cached platform table
-  hidpp/discovery.py   endpoint enumeration and fan-out device scan
-  watchers/windows.py  CM_Register_Notification (cfgmgr32)
-  watchers/darwin.py   IOKit service matching on a dedicated CFRunLoop thread
-  agent.py             the event-driven supervisor
+  hidpp/protocol.py         framing, error decoding, OS masks — pure, fully unit-tested
+  hidpp/transport.py        handles + one reader thread each + request/notification dispatch
+  hidpp/device.py           capability probing and the cached platform table
+  hidpp/discovery.py        endpoint enumeration and fan-out device scan
+  platform/                 per-OS code gathered behind one facade (is_windows/is_macos, paths, logging)
+    watchers/windows.py       CM_Register_Notification (cfgmgr32)
+    watchers/darwin.py        IOKit service matching on a dedicated CFRunLoop thread
+    _wintoast.py              Windows toast via raw WinRT/ctypes (no PowerShell process)
+  agent/                    the event-driven supervisor: __init__ (core loop), _arbitration (peer/Options+ turn-taking), _sessions (HID++ sessions + hint persistence)
 ```
 
 ## Things worth knowing before you change code
@@ -99,5 +101,5 @@ logiswitch/
 ## Platform coverage
 
 CI runs the suite on Windows and macOS. The macOS device-notification watcher
-(`watchers/darwin.py`) has not been exercised on real Apple hardware yet — if you
+(`platform/watchers/darwin.py`) has not been exercised on real Apple hardware yet — if you
 have a Mac and a Logitech receiver, confirming or fixing it is very welcome.

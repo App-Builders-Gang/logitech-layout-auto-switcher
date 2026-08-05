@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+A structural refactor: the large flat modules became focused packages. No
+runtime behaviour changes — every method moved verbatim and the full test suite
+is unchanged — but a few *internal* module paths moved, which is breaking only
+for code that imported those internals directly.
+
+`agent.py`, `cli.py` and `notify.py` split into `agent/`, `cli/` and `notify/`
+packages; the per-OS code scattered across `paths.py`, `watchers/` and the toast
+backend is gathered under `platform/`; and `doctor_report` plus the shared
+device-walking helpers moved out of `cli` into `doctor.py` and `endpoints.py`,
+which breaks the old `bundle` ↔ `cli` import cycle.
+
+### Changed — internal module paths (breaking only for direct importers)
+
+- `logiswitch.paths` → `logiswitch.platform` (also at `logiswitch.platform.paths`).
+- `logiswitch.watchers` → `logiswitch.platform.watchers` (`create_watcher`,
+  `Watcher`, `DeviceEvent` are also re-exported at `logiswitch.platform`).
+- `logiswitch._wintoast` → `logiswitch.platform._wintoast` (private).
+
+Nothing the daemon, the installers, or the `logiswitch` command itself does is
+affected — all of it enters through `logiswitch.cli:main`. The public API
+(`logiswitch.agent.Agent` / `AgentConfig`, `logiswitch.notify.*`,
+`logiswitch.hidpp.*`, `logiswitch.__version__`) is unchanged.
+
 ## 2.4.0 — 2026-08-04
 
 Windows toasts without spawning PowerShell. Every notification used to launch a
