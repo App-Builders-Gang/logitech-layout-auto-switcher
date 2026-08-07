@@ -173,7 +173,9 @@ def test_install_reports_what_it_registered(monkeypatch, capsys):
     monkeypatch.setattr(service, "ensure_on_path", lambda: True)
     monkeypatch.setattr(service, "path_hint", lambda: "open a new terminal")
     monkeypatch.setattr(
-        service, "install", lambda target=None, notify=True, observe=False: f"thing for {target}"
+        service,
+        "install",
+        lambda target=None, notify=True, observe=False, event_only=None: f"thing for {target}",
     )
     monkeypatch.setattr(service, "status", lambda: {"installed": True, "state": "Running"})
 
@@ -188,7 +190,9 @@ def test_install_reports_what_it_registered(monkeypatch, capsys):
 
 def test_install_does_not_mention_path_when_already_there(monkeypatch, capsys):
     monkeypatch.setattr(
-        service, "install", lambda target=None, notify=True, observe=False: "scheduled task"
+        service,
+        "install",
+        lambda target=None, notify=True, observe=False, event_only=None: "scheduled task",
     )
     monkeypatch.setattr(service, "ensure_on_path", lambda: False)
     monkeypatch.setattr(service, "status", lambda: {"installed": True, "state": "Running"})
@@ -200,7 +204,7 @@ def test_install_does_not_mention_path_when_already_there(monkeypatch, capsys):
 
 
 def test_install_surfaces_a_failure(monkeypatch, capsys):
-    def boom(target=None, notify=True, observe=False):
+    def boom(target=None, notify=True, observe=False, event_only=None):
         raise service.ServiceError("launchctl said no")
 
     monkeypatch.setattr(service, "install", boom)
@@ -343,8 +347,9 @@ def test_flags_that_are_not_given_fall_back(monkeypatch, receiver):
 def test_install_passes_the_notification_choice_through(monkeypatch, capsys):
     seen = {}
 
-    def fake_install(target=None, notify=True, observe=False):
+    def fake_install(target=None, notify=True, observe=False, event_only=None):
         seen["notify"] = notify
+        seen["event_only"] = event_only
         return "a service"
 
     monkeypatch.setattr(service, "install", fake_install)
@@ -354,6 +359,12 @@ def test_install_passes_the_notification_choice_through(monkeypatch, capsys):
     assert seen["notify"] is False
     run(capsys, "install")
     assert seen["notify"] is True, "notifications are on unless asked otherwise"
+    run(capsys, "install", "--event-only")
+    assert seen["event_only"] is True
+    run(capsys, "install", "--no-event-only")
+    assert seen["event_only"] is False
+    run(capsys, "install")
+    assert seen["event_only"] is None, "default install leaves the mode to auto-detect at runtime"
 
 
 def test_watch_defaults_to_notifying():

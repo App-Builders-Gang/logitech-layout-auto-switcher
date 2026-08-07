@@ -147,6 +147,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="only ever set Easy-Switch host N. Use this when every machine has its "
         "own receiver, so each owns a different host slot",
     )
+    p_watch.add_argument(
+        "--event-only",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="look when a device arrives, then go quiet until the next arrival -- the "
+        "right setting for a receiver shared with Logi Options+. With no argument (the "
+        "default) the mode is chosen automatically: on when local Logitech software is "
+        "detected, off otherwise. --event-only / --no-event-only force either way",
+    )
+    p_watch.add_argument(
+        "--event-only-reassert",
+        type=float,
+        default=AgentConfig.event_only_reassert,
+        metavar="SECONDS",
+        help="backstop re-check interval in event-only mode. Bounds how long a missed "
+        "arrival can leave the layout wrong. 0 disables the backstop entirely -- not "
+        f"one request until something happens (default: {AgentConfig.event_only_reassert:.0f})",
+    )
     p_watch.set_defaults(func=cmd_watch)
 
     p_install = sub.add_parser("install", help="start the agent at logon", parents=[common])
@@ -161,6 +179,14 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="let the background agent show desktop notifications (default: yes)",
+    )
+    p_install.add_argument(
+        "--event-only",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="install the agent in event-only mode. With no argument the installed "
+        "service auto-detects at runtime (event-only when local Logitech software is "
+        "found); --event-only / --no-event-only bake the choice into the service",
     )
     p_install.set_defaults(func=cmd_install)
 

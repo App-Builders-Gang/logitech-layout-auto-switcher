@@ -320,6 +320,17 @@ class HidppDevice:
         Cached only on success: a timeout here must not pin the whole session to the
         fallback. The cache lives on the device object, which discovery recreates on
         every session, so an Easy-Switch hop cannot leave a stale index behind.
+
+        A timeout, though, is not "no 0x1815" -- it is a transient failure to ask, on
+        a device that does have the feature (``feature_index`` would have raised
+        :class:`UnsupportedFeature` otherwise). Falling back to ``0xFF`` *anyway* on a
+        timeout writes to a host the firmware mishandles, the write is acknowledged
+        and silently dropped, and the next read sees the platform unchanged -- which
+        the agent reads as a reversion it must fight, arming the close re-checker.
+        On a receiver shared with Logi Options+ that self-sustains: each phantom
+        correction is more traffic, more timeouts, more phantom corrections. So a
+        timeout is allowed to propagate and fail the pass, rather than produce a
+        write that looks exactly like the bug it would mask.
         """
         if self._claimed_host is not None:
             return self._claimed_host
@@ -328,7 +339,12 @@ class HidppDevice:
         try:
             fi = self.feature_index(p.FEATURE_HOSTS_INFO)
             reply = self.transport.request(self.index, fi, p.HI_GET_FEATURE_INFO)
-        except (p.UnsupportedFeature, p.HidppError, p.HidppTimeout):
+        except p.HidppTimeout:
+            # Transient: the device has 0x1815 (else feature_index raised above) but
+            # did not answer in time. Let this propagate -- failing the pass and
+            # retrying is better than a write to 0xFF that will not stick.
+            raise
+        except (p.UnsupportedFeature, p.HidppError):
             log.debug("device %d has no usable 0x1815; addressing host 0xFF", self.index)
             return p.HOST_CURRENT
         if len(reply) <= 3:

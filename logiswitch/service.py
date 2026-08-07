@@ -121,7 +121,10 @@ def _current_user() -> str:
 
 
 def _agent_command(
-    target_os: str | None, notify: bool = True, observe: bool = False
+    target_os: str | None,
+    notify: bool = True,
+    observe: bool = False,
+    event_only: bool | None = None,
 ) -> tuple[str, str]:
     executable = python_executable(windowless=True)
     arguments = f"-m {APP_NAME} watch"
@@ -129,6 +132,13 @@ def _agent_command(
         arguments += f" --os {target_os}"
     if observe:
         arguments += " --observe"
+    if event_only is True:
+        # Forced on/off is baked into argv; leaving it unset lets the running agent
+        # resolve auto (event-only when local Logitech software is detected), which is
+        # what a plain `install` wants.
+        arguments += " --event-only"
+    elif event_only is False:
+        arguments += " --no-event-only"
     if not notify:
         # Baked into argv rather than passed as an environment variable: the Task
         # XML has no <Environment> element, so argv is the only channel that works
@@ -140,8 +150,13 @@ def _agent_command(
 # -- Windows ------------------------------------------------------------------
 
 
-def _windows_install(target_os: str | None, notify: bool = True, observe: bool = False) -> str:
-    command, arguments = _agent_command(target_os, notify, observe)
+def _windows_install(
+    target_os: str | None,
+    notify: bool = True,
+    observe: bool = False,
+    event_only: bool | None = None,
+) -> str:
+    command, arguments = _agent_command(target_os, notify, observe, event_only)
     xml = _TASK_XML.format(
         task_name=TASK_NAME,
         user=_current_user(),
@@ -247,13 +262,22 @@ def _bootstrap(domain: str, target: str, path: Path) -> None:
     )
 
 
-def _macos_install(target_os: str | None, notify: bool = True, observe: bool = False) -> str:
+def _macos_install(
+    target_os: str | None,
+    notify: bool = True,
+    observe: bool = False,
+    event_only: bool | None = None,
+) -> str:
     executable = str(python_executable())
     arguments = [executable, "-m", APP_NAME, "watch"]
     if target_os:
         arguments += ["--os", target_os]
     if observe:
         arguments.append("--observe")
+    if event_only is True:
+        arguments.append("--event-only")
+    elif event_only is False:
+        arguments.append("--no-event-only")
     if not notify:
         arguments.append("--no-notify")
     # launchd's own stdio capture goes to a separate file: the agent writes its log
@@ -325,12 +349,17 @@ def _macos_status() -> dict:
 # -- public -------------------------------------------------------------------
 
 
-def install(target_os: str | None = None, notify: bool = True, observe: bool = False) -> str:
+def install(
+    target_os: str | None = None,
+    notify: bool = True,
+    observe: bool = False,
+    event_only: bool | None = None,
+) -> str:
     """Register the background service. Does not touch PATH (see ensure_on_path)."""
     if is_windows():
-        return _windows_install(target_os, notify, observe)
+        return _windows_install(target_os, notify, observe, event_only)
     if is_macos():
-        return _macos_install(target_os, notify, observe)
+        return _macos_install(target_os, notify, observe, event_only)
     raise ServiceError(
         "automatic service installation is only implemented for Windows and macOS; "
         f"run '{APP_NAME} watch' from your own supervisor instead"

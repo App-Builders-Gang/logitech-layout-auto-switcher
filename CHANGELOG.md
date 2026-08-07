@@ -1,5 +1,92 @@
 # Changelog
 
+## 2.6.0 — 2026-08-07
+
+The calculator key on an MX Keys S did nothing while this agent was running, and
+worked the instant it was stopped. Reproduced on demand, in both directions. The same
+receiver was also running Logi Options+, which diverts that key: a diverted key emits a
+HID++ notification instead of a keystroke, and Options+ has to receive it and act.
+
+The first theory -- that the agent's chatter-driven reply collided with Options+ 200ms
+after each keypress -- was wrong, and a frame trace disproved it: on a keypress the agent
+received the notification and sent *nothing* in reply, yet the key still failed. The real
+cause was one layer down.
+
+### Fixed
+
+- **Opening the keyboard exclusively starved Logi Options+ of its diverted keys.** The
+  `hid` package (cython-hidapi) links the C hidapi library, whose macOS backend opens
+  IOHIDDevice with `kIOHIDOptionsTypeSeizeDevice` by default. A seize hands the device's
+  input reports to the opener alone: every other client reading the same vendor collection
+  -- Logi Options+, Solaar, anything -- stops receiving them. That is silent to ordinary
+  typing, which travels a different (boot/consumer) interface, but it broke every HID++ 2.0
+  notification another program relies on. A key Logi Options+ has diverted (HID++ `0x1B04`,
+  control `0x000A` for the calculator key) emits its keypress as exactly such a
+  notification; with this agent holding the interface exclusively the notification reached
+  only us, and the key did nothing. Verified both ways: the notification arrives here and
+  the agent sends nothing in reply, yet the key fails; opening non-exclusively restores it
+  immediately. cython-hidapi does not bind the switch, so `hid_darwin_set_open_exclusive(0)`
+  is now called through ctypes at import time, before any open.
+
+  This is the fix that restores the key. The traffic reductions below fix real problems of
+  their own -- the receiver is shared fairly now, and less of our traffic is more headroom
+  for Options+ -- but none of them was the calculator key.
+
+- **One sighting of another machine started a poll loop lasting half an hour.** A peer is
+  remembered for thirty minutes on purpose -- a short memory oscillates -- but the scheduler
+  read that memory as a reason to re-check the keyboard every 0.7 seconds. About 2,500
+  requests from a single foreign platform write, which on a Mac is what Options+ correcting
+  the platform seven seconds after its agent starts produces. Replaced with a watch on the
+  host's own input clock: the agent sends nothing while the machine is idle and reclaims the
+  layout on the idle-to-in-use edge -- the moment somebody actually returns to it.
+
+- **Retrying an absent keyboard never stopped.** A Bolt receiver stays enumerated across an
+  Easy-Switch move, so with the keyboard on another machine the agent kept a live transport
+  and asked it something every ten seconds, indefinitely, each request burning the full 1.2s
+  deadline. That is where the 30% timeout rate came from. In event-only mode the retries stop
+  after three attempts across fourteen seconds and the agent waits for the device to announce
+  itself.
+
+- **A timeout resolving the host fell back to 0xFF.** The MX Keys S firmware mishandles host
+  0xFF: a write addressed there is acknowledged and then quietly dropped, which reads exactly
+  like another program reverting the setting. A transient timeout on the `0x1815` lookup used
+  to fall back to 0xFF anyway, manufacturing phantom reversions that armed the close
+  re-checker, on a shared receiver where each such write is a collision. A timeout now
+  propagates and fails the pass, so nothing is written until the host can be resolved again.
+
+- **A write that would not confirm was logged as nothing answering.** The pass reports
+  failure for either reason, and the presence record read that one field for both: a keyboard
+  sitting on the desk that had accepted and dropped a write produced "nothing is answering;
+  waiting for a device to come back". Whether anything answered is now recorded separately
+  from whether the pass succeeded.
+
+- **Unsolicited chatter from a settled keyboard no longer schedules a pass.** A notification
+  from a device that is present and answering is chatter, not a reconnect; the agent now wakes
+  on it only when the device could actually have been away. This was originally built as the
+  calculator-key fix and turned out not to be -- the cause was the exclusive open above -- but
+  it still removes a class of spurious traffic now that the channel is fairly shared.
+
+- **`install` registered the service twice**, the first time with default flags. On Windows
+  that meant ending, replacing and starting the scheduled task twice per install, briefly
+  running an agent with settings nobody asked for.
+
+### Added
+
+- **`--event-only`: look when something happens, and not otherwise.** A device arrives, the
+  platform is read and corrected if wrong, and then the agent goes quiet until the next
+  arrival. With no argument (the default) the mode is chosen automatically -- on when local
+  Logitech software is detected, off otherwise; `--event-only` / `--no-event-only` force
+  either way. The mode does not change *whether* the agent may write (turn-taking with another
+  machine over a KVM works exactly as before), only *when it looks*. A five-minute backstop
+  heartbeat bounds "silently wrong" rather than leaving it unbounded; `--event-only-reassert 0`
+  removes it for the strict version.
+
+  Close re-checking after a correction is deliberately kept: it engages only once something
+  has actually had to be corrected and switches itself off, so a well-behaved keyboard never
+  pays for it. What is new is that in event-only mode it gives up after three corrections
+  inside one arrival and waits, so a fight re-checking cannot win does not turn the mode back
+  into the poll loop it exists to remove.
+
 ## 2.5.0 — 2026-08-05
 
 A structural refactor: the large flat modules became focused packages. No

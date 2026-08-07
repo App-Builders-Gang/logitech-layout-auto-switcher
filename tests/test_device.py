@@ -335,14 +335,24 @@ def test_the_host_index_is_resolved_once_per_session(monkeypatch):
         transport.close()
 
 
-def test_a_device_that_will_not_answer_0x1815_is_not_pinned_to_the_fallback(monkeypatch):
-    """A timeout must not cache 0xFF for the rest of the session."""
+def test_a_device_that_will_not_answer_0x1815_does_not_write_to_0xff(monkeypatch):
+    """A timeout resolving the host must not fall back to 0xFF at all.
+
+    Earlier this returned 0xFF without caching it -- "not pinned to the fallback for
+    the rest of the session". That is too weak for the MX Keys S, whose firmware
+    acknowledges a write to 0xFF and then silently drops it: the write looks exactly
+    like another program reverting the setting, arms the close re-checker, and on a
+    receiver shared with Logi Options+ each such write is a collision. A timeout is now
+    allowed to propagate and fail the pass, so nothing is written until the host can be
+    resolved again.
+    """
     keys = fakehid.mx_keys_s()
     transport = _open(monkeypatch, keys)
     try:
         device = HidppDevice(transport, fakehid.MX_KEYS_INDEX)
         keys.asleep = True
-        assert device.current_host() == p.HOST_CURRENT
+        with pytest.raises(p.HidppTimeout):
+            device.current_host()
         keys.asleep = False
         assert device.current_host() == fakehid.CURRENT_HOST, "must retry once reachable"
     finally:

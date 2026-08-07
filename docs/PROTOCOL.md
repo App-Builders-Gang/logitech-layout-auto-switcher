@@ -233,6 +233,35 @@ request we recorded sending — which is what `Transport._was_ours` checks.
 across a KVM. So the agent refuses to stand down while a local rival is running:
 yielding is a bargain between machines, and there is nobody typing on Options+.
 
+### The open must be non-exclusive, or coexistence is silent nonsense
+
+The traffic numbers above were measured with both programs running, and they looked
+fine — so fine that "shares the receiver correctly" shipped in a changelog. It was
+wrong. The metric that was missing is whether the *other* program still receives
+anything at all.
+
+cython-hidapi (the `hid` package) links the C hidapi library, whose macOS backend opens
+`IOHIDDevice` with `kIOHIDOptionsTypeSeizeDevice` by default. A seize delivers the
+device's input reports to the opener alone; every other client reading the same vendor
+collection stops receiving them. That is invisible to ordinary typing — it travels the
+boot/consumer interface — but it breaks every HID++ 2.0 notification another program
+relies on. A key Logi Options+ has diverted (`0x1B04`, control `0x000A` for the
+calculator key) emits its keypress as exactly such a notification; with this agent
+holding the interface exclusively the notification reached only us, Options+ never saw
+it, and the key did nothing. A frame trace on our side looked healthy: the notification
+arrived, we sent nothing in reply. The failure was entirely on the other side of a
+seize we never told anyone about.
+
+`hid_darwin_set_open_exclusive(0)` is called at import (`backend.configure_non_exclusive_open`)
+before any open, reached through ctypes because cython-hidapi does not bind the symbol.
+There is a test that pins the call.
+
+**The lesson, for anyone editing the HID layer:** a green test suite and quiet logs
+prove only that *we* can talk to the device. They do not prove another program still
+can. Coexistence with a second HID++ client can only be proven on real hardware with
+that client running — press a key it has diverted and check it still works. Do that
+before claiming "runs alongside Logi Options+."
+
 ## Recorded hardware profile
 
 Windows host, 2026-07-31. Logi Bolt `046D:C548`, HID++ collections on interface 2.

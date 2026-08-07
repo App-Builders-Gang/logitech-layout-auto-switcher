@@ -169,3 +169,55 @@ def test_a_missing_hid_module_gives_an_actionable_error(monkeypatch):
 
     with pytest.raises(backend.HidUnavailable):
         backend.open_path(b"p")
+
+
+class _FakeExclusiveSetter:
+    """A stand-in for the loaded hidapi C library, recording the exclusive call."""
+
+    def __init__(self):
+        self.called_with: int | None = None
+
+    @property
+    def hid_darwin_set_open_exclusive(self):
+        def setter(value):
+            self.called_with = value
+
+        setter.argtypes = None
+        setter.restype = None
+        return setter
+
+
+def test_the_hid_open_is_made_non_exclusive_on_macos(monkeypatch):
+    """The regression test for the calculator key.
+
+    cython-hidapi opens IOHIDDevice with ``kIOHIDOptionsTypeSeizeDevice`` by default,
+    which hands the device's input reports to the opener alone and starves every other
+    client -- Logi Options+ above all, whose diverted keys arrive as HID++ notifications
+    it must receive to act on. The fix is one call to
+    ``hid_darwin_set_open_exclusive(0)`` before any open. This test pins that the call
+    happens with 0, so the regression cannot return silently: drop the call, or pass
+    anything but 0, and a key another program has diverted stops working again.
+    """
+    import ctypes
+
+    fake_lib = _FakeExclusiveSetter()
+    # `configure_non_exclusive_open` imports ctypes itself and resolves CDLL off that
+    # module object, so the patch must land on the real ctypes module.
+    monkeypatch.setattr(ctypes, "CDLL", lambda _path: fake_lib)
+    monkeypatch.setattr(backend.sys, "platform", "darwin")
+
+    fake_hid = type("FakeHid", (), {"__file__": "/fake/hid.so"})()
+    applied = backend.configure_non_exclusive_open(fake_hid)
+
+    assert applied is True
+    assert fake_lib.called_with == 0, "the open must be non-exclusive, or diverted keys break"
+
+
+def test_the_open_mode_is_left_alone_off_macos(monkeypatch):
+    """On Windows and Linux there is no seize, so nothing to configure."""
+    import ctypes
+
+    monkeypatch.setattr(ctypes, "CDLL", lambda _path: pytest.fail("no ctypes call expected"))
+    monkeypatch.setattr(backend.sys, "platform", "win32")
+
+    assert backend.configure_non_exclusive_open(type("F", (), {"__file__": "x"})()) is False

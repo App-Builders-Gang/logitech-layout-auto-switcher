@@ -20,7 +20,14 @@ from typing import TYPE_CHECKING
 
 from .. import activity, diagnostics, notify, trace
 from ..hidpp import protocol as p
-from . import CHURN_THRESHOLD, CHURN_WINDOW, REVERT_WINDOW, RIVAL_RECHECK, SETTLED_CHECKS
+from . import (
+    CHURN_THRESHOLD,
+    CHURN_WINDOW,
+    QUIET_CORRECTION_BUDGET,
+    REVERT_WINDOW,
+    RIVAL_RECHECK,
+    SETTLED_CHECKS,
+)
 
 log = logging.getLogger("logiswitch.agent")
 
@@ -50,8 +57,12 @@ class _ArbitrationMixin:
         _rivals_checked: float
         _rivals: list[str]
         _clean_checks: int
+        _arrival_corrections: int
+        _quiet_gave_up: bool
 
         def _peer_present(self) -> bool: ...
+
+        def _event_only(self) -> bool: ...
 
     def _note_foreign_write(self, frame: bytes) -> None:
         """Another host is setting this keyboard's platform too.
@@ -353,5 +364,23 @@ class _ArbitrationMixin:
             # here, the same evidence is equally explained by it -- and easing off
             # against a device that keeps dropping the setting is precisely backwards:
             # close re-checking is the only thing that keeps such a keyboard usable.
+            return False
+        if self._event_only() and self._arrival_corrections > QUIET_CORRECTION_BUDGET:
+            # Close re-checking exists to outlast firmware that drops the setting. A
+            # handful of corrections inside one arrival says it is not going to stop,
+            # and in event-only mode continuing would turn the mode into the poll loop
+            # it was added to remove. Say so once, loudly, and wait for the next
+            # arrival rather than re-checking forever.
+            if not self._quiet_gave_up:
+                self._quiet_gave_up = True
+                trace.HEALTH.mark("quiet_settle_abandoned")
+                log.warning(
+                    "the platform has been corrected %d times since this device "
+                    "arrived and keeps reverting -- in event-only mode this agent is "
+                    "stopping the close re-check rather than competing for the "
+                    "receiver. The next arrival, or the backstop heartbeat, will try "
+                    "again.",
+                    self._arrival_corrections,
+                )
             return False
         return self._clean_checks < SETTLED_CHECKS

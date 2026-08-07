@@ -118,10 +118,45 @@ ACTIVE_WINDOW = 20.0
 #: Spread of the random delay added to a write while a peer is around, so two machines
 #: that both briefly think they are active cannot settle into a synchronised fight.
 PEER_JITTER = 0.4
+#: How often to re-sample whether this machine is in use, while a peer holds the
+#: keyboard and this machine is idle.
+#:
+#: This is the replacement for polling the *keyboard* twice a second for half an hour
+#: after one peer sighting. Nothing is sent to the device to take this reading: it asks
+#: the host when it last saw input (``CGEventSourceSecondsSinceLastEventType`` on macOS,
+#: ``GetLastInputInfo`` on Windows), so it costs no HID++ traffic at all and asks for no
+#: Accessibility privilege. The interval bounds how quickly the layout is put right after
+#: somebody returns to this machine -- a second or two reads as "the first keystroke or
+#: two" rather than "the first twenty seconds".
+IDLE_PEEK = 1.0
 #: How often to re-check which Logitech software is running here. This shells out to
 #: list processes, so it is deliberately infrequent -- rivals appear and disappear on
 #: the timescale of somebody launching an app, not of a keystroke.
 RIVAL_RECHECK = 120.0
+
+# -- event-only mode: look when something happens, not otherwise ----------------
+
+#: Heartbeat interval in event-only mode. The ordinary heartbeat exists to catch a
+#: device coming back on hardware that announces nothing, and event-only mode's claim
+#: is that an arriving device always *does* announce itself -- by the OS for a KVM hop,
+#: by starting to talk for an Easy-Switch return. That claim is well founded and it is
+#: still a claim, so a much slower heartbeat stays behind it: five minutes bounds
+#: "silently wrong" rather than leaving it unbounded. 12 requests/hour against 180.
+QUIET_REASSERT = 300.0
+#: How many times to retry an absent device in event-only mode before giving up and
+#: waiting for it to announce itself. Three attempts span about fourteen seconds
+#: (2s, 4s, 8s), which covers a device that is genuinely mid-reconnect -- the only
+#: thing retries were ever for. Beyond that the device is on another machine, and
+#: asking every ten seconds for the rest of the day is the sustained traffic event-only
+#: mode exists to remove. Unbounded retry is also the dominant source of timeouts on a
+#: receiver shared with Logi Options+: a Bolt receiver stays enumerated across an
+#: Easy-Switch move, so the transport stays live and each retry burns the full deadline.
+QUIET_RETRY_ATTEMPTS = 3
+#: How many corrections inside one arrival event-only mode tolerates before it stops
+#: close re-checking and waits. One correction is normal; two is a device that dropped
+#: the write once; three inside a single arrival is a fight re-checking cannot win, and
+#: continuing would turn "event-only" into the poll loop it was added to remove.
+QUIET_CORRECTION_BUDGET = 3
 
 
 class _Event(Enum):
@@ -164,6 +199,18 @@ class AgentConfig:
     #: one. None means "whichever host the keyboard says it is talking to", which is
     #: right whenever each machine has its own receiver.
     claim_host: int | None = None
+    #: Look when something happens, and not otherwise. A device arrives, the platform
+    #: is read and corrected if wrong, and then the agent goes quiet until the next
+    #: arrival. The right setting for a machine that shares its receiver with Logi
+    #: Options+: the only thing that should ever compete for the receiver is a real
+    #: platform switch, not a heartbeat or a retry or a peer poll. ``None`` (the
+    #: default) resolves to event-only when local Logitech software is detected and to
+    #: the ordinary duty cycle otherwise; ``True``/``False`` force either way.
+    event_only: bool | None = None
+    #: Safety re-check interval while event-only. :data:`QUIET_REASSERT` by default;
+    #: 0 means "not one request until something happens", and accepts that an event
+    #: the agent misses leaves the layout wrong until the user notices.
+    event_only_reassert: float = QUIET_REASSERT
 
 
 @dataclass
@@ -209,8 +256,24 @@ class Agent(_ArbitrationMixin, _SessionMixin):
         self._contention_warned = False
         self._last_summary: str | None = None
         #: When the devices stopped answering, so the log can say how long a
-        #: KVM/Easy-Switch round trip actually took to recover.
+        #: KVM/Easy-Switch round trip actually took to recover -- and, being the only
+        #: record that anything was ever away, what decides whether a device's chatter
+        #: means it came back. Written by the worker, read from reader threads:
+        #: rebound, never mutated, exactly like ``_driven``.
         self._absent_since: float | None = None
+        #: Whether the last completed pass reached anything we drive. A different
+        #: question from "did the pass succeed" -- a write that is accepted and will
+        #: not confirm fails the pass, but the keyboard plainly answered. Reading one
+        #: for the other put "nothing is answering" in the log about a device sitting
+        #: on the desk, and left ``_absent_since`` set on it.
+        self._reached = False
+        #: Whether this machine was idle (past :attr:`active_window`) at the last
+        #: input sample. The peer-watch samples the host clock without touching the
+        #: device and reclaims the layout only on the idle-to-in-use *edge* -- so a
+        #: machine that is continuously in use is not polled, only one that went away
+        #: and came back. Starts False so a machine that has been in use since start
+        #: does not reclaim until it has actually been away.
+        self._was_idle = False
         #: Next time the agent says out loud that it is alive. Without this a
         #: healthy log falls silent after one line, and "it went wrong at 14:32"
         #: has nothing to be checked against.
@@ -222,6 +285,16 @@ class Agent(_ArbitrationMixin, _SessionMixin):
         #: settled value so a well-behaved device is never polled: close watch begins
         #: only once something has actually had to be corrected.
         self._clean_checks = SETTLED_CHECKS
+        #: Retry attempts since the device last answered, for event-only's bounded
+        #: retry. Reset on any device event that implies presence returned.
+        self._retry_attempts = 0
+        #: Corrections made inside the current arrival, for event-only's correction
+        #: budget. Reset whenever a device arrives (DEVICE_CHANGED) or wakes from
+        #: absence, so the budget is per-arrival rather than lifetime.
+        self._arrival_corrections = 0
+        #: Whether the correction budget has been exhausted this arrival, so the
+        #: "giving up" log line fires once rather than once per pass.
+        self._quiet_gave_up = False
         #: Feature index of MULTIPLATFORM per driven device, so an inbound frame can
         #: be recognised as a platform write rather than any old reply.
         self._platform_features: dict[int, int] = {}
@@ -249,12 +322,15 @@ class Agent(_ArbitrationMixin, _SessionMixin):
 
     def start(self) -> None:
         log.info(
-            "logiswitch agent starting on %s: target=%s reassert=%s%s%s",
+            "logiswitch agent starting on %s: target=%s reassert=%s%s%s%s",
             # Two machines sharing a keyboard produce two identical-looking logs;
             # naming the host is what makes a pair of them readable side by side.
             socket.gethostname(),
             self.cfg.target_os,
             f"{self.cfg.reassert_interval:.0f}s" if self.cfg.reassert_interval else "off",
+            # event_only may still resolve to the auto choice once the rival scan runs,
+            # so name the configured value rather than the resolved one at start-up.
+            " event-only" if self.cfg.event_only else "",
             " observe-only" if self.cfg.observe else "",
             f" host={self.cfg.claim_host}" if self.cfg.claim_host is not None else "",
         )
@@ -381,7 +457,102 @@ class Agent(_ArbitrationMixin, _SessionMixin):
             # ignored (a mouse sprays movement events). With no devices we accept
             # anything: we are mid-retry precisely because the keyboard was away,
             # and that is the moment its return matters most.
+            if not self._might_have_been_away():
+                # Present, answering, and talking: chatter, not a return. Counted
+                # rather than dropped silently, so a report that a return went
+                # unnoticed can be checked against a number instead of argued about.
+                trace.HEALTH.bump("settled_chatter")
+                return
             self._put((_Event.DEVICE_WOKE, index))
+
+    def _might_have_been_away(self) -> bool:
+        """Could a device have left and come back since one of them last answered?
+
+        The gate on treating unsolicited chatter as a reconnect, and it exists because
+        the frame itself cannot answer the question. What a returning device says first
+        is device-specific, which is why :meth:`_on_hidpp_frame` trusts the sender
+        rather than the message -- but trusting the sender *alone* made every
+        notification a return, and a keyboard sitting on the desk emits plenty.
+
+        A key Logi Options+ has diverted emits one *instead* of a keystroke, and
+        Options+ has to receive it and act. Answering that with a request of our own
+        200ms later put two programs on one receiver's transaction slots at the moment
+        one of them was busy; the receiver said it had no room -- 462 times, in replies
+        addressed to Options+ -- and the calculator key did nothing at all. Stopping
+        this agent made it work immediately, in both directions, on demand.
+
+        So ask whether a return is *possible* rather than whether one happened. It is
+        not, while a device we drive is answering us: it never left, and the frame is a
+        lock-key state, a battery reading, or a key somebody else has diverted. It is
+        possible when the last completed pass found nothing answering -- a keyboard on
+        another Easy-Switch channel answers nothing, which is what sets
+        ``_absent_since`` -- or before the first pass has established what we drive.
+
+        No new threshold: "long enough to have plausibly been away" is already defined
+        and already tuned as :attr:`AgentConfig.reassert_interval`, because absence is
+        discovered by the heartbeat and only by the heartbeat. A second constant would
+        be a second definition of the same thing, and the two would drift. Turn the
+        heartbeat off and nothing is left to notice a device has gone, so chatter
+        becomes the only signal there is and is trusted exactly as it was before.
+
+        Deliberately not per-device. Two driven devices, one asleep, keeps this open on
+        the other's chatter -- but a pass is already failing in that state and the retry
+        band is already transmitting, so being cleverer buys nothing and a per-device
+        ledger would have to be kept in step from two threads.
+        """
+        if not self._heartbeat_interval():
+            # No heartbeat of any kind is running -- not the ordinary one, and not
+            # event-only's slow backstop. With nothing left to discover absence,
+            # chatter is the only signal there is and is trusted exactly as before.
+            return True
+        if not self._driven:
+            return True
+        return self._absent_since is not None
+
+    def _can_reclaim_on_input(self) -> bool:
+        """Can this machine notice it is being used again, without touching the device?
+
+        When another machine shares the keyboard, the right trigger for taking it back is
+        not "a peer was once seen, so poll the keyboard forever" but "somebody just sat
+        down here". The host already knows when it was last used, and asking it costs no
+        HID++ traffic and no Accessibility prompt -- which is why it is the basis of
+        :meth:`_idle_seconds` already. This is only a capability check; the edge itself is
+        detected in :meth:`_run` by sampling at :data:`IDLE_PEEK` while idle.
+
+        Where the host cannot report input activity at all, this returns False and the
+        caller keeps the old behaviour -- a machine that can never prove it is in use must
+        not be left permanently silent.
+        """
+        return activity.available()
+
+    def _event_only(self) -> bool:
+        """Is this agent in event-only mode?
+
+        ``None`` (the default) resolves to event-only when local Logitech software is
+        detected, because a machine sharing its receiver with Logi Options+ is the one
+        case where the ordinary heartbeat and retry duty cycle competes for transaction
+        slots the other program needs -- and a diverted key, which Options+ has to
+        receive and act on, is starved by exactly that competition. ``True`` or
+        ``False`` force the choice regardless of what else is installed, for machines
+        that know better than the heuristic.
+
+        Resolved fresh on each call: a process-list scan is exactly what
+        :meth:`_local_rival` already caches for :data:`RIVAL_RECHECK` seconds, so this
+        rides that cache rather than holding a second opinion that could disagree.
+        """
+        if self.cfg.event_only is not None:
+            return self.cfg.event_only
+        return bool(self._local_rival())
+
+    def _heartbeat_interval(self) -> float:
+        """Seconds between backstop re-checks, or 0 to disable the backstop.
+
+        Event-only mode rests on the claim that an arriving device always announces
+        itself; the heartbeat there is a slow safety net, not the primary trigger.
+        """
+        if self._event_only():
+            return self.cfg.event_only_reassert
+        return self.cfg.reassert_interval
 
     def _put(self, item: tuple) -> None:
         try:
@@ -396,11 +567,12 @@ class Agent(_ArbitrationMixin, _SessionMixin):
     def _run(self) -> None:
         next_assert: float | None = time.monotonic()  # assert once at start-up
         next_heartbeat: float | None = None
+        next_idle_peek: float | None = None  # set while watching for the user's return
         self._next_summary = time.monotonic() + STEADY_SUMMARY_INTERVAL
 
         while not self._stop.is_set():
             now = time.monotonic()
-            deadlines = [d for d in (next_assert, next_heartbeat) if d is not None]
+            deadlines = [d for d in (next_assert, next_heartbeat, next_idle_peek) if d is not None]
             deadlines.append(self._next_summary)
             timeout = max(0.0, min(deadlines) - now)
 
@@ -415,7 +587,12 @@ class Agent(_ArbitrationMixin, _SessionMixin):
                 # The interface set changed; every open handle is suspect.
                 self._teardown_sessions(f"device {getattr(payload, 'value', payload)}")
                 next_assert = time.monotonic() + self.cfg.debounce
+                next_idle_peek = None  # the peer-watch is meaningless across a reconnect
                 self._retry = 0.0
+                self._retry_attempts = 0
+                # A new arrival: the correction budget and its give-up flag are per-arrival.
+                self._arrival_corrections = 0
+                self._quiet_gave_up = False
                 continue
             if kind is _Event.DEVICE_WOKE:
                 log.debug("device %s spoke unprompted -- treating it as a reconnect", payload)
@@ -425,6 +602,9 @@ class Agent(_ArbitrationMixin, _SessionMixin):
                 # of inheriting the 30s ceiling reached while it was away -- that
                 # inheritance is what made a return take half a minute to correct.
                 self._retry = 0.0
+                self._retry_attempts = 0
+                self._arrival_corrections = 0
+                self._quiet_gave_up = False
                 next_assert = min(next_assert or float("inf"), time.monotonic() + 0.2)
                 continue
 
@@ -448,32 +628,99 @@ class Agent(_ArbitrationMixin, _SessionMixin):
                 except Exception:
                     log.exception("unexpected failure while applying the platform")
                     ok = False
-                self._note_presence(ok)
+                    # A pass that blew up proves nothing about who answered, and the
+                    # away-record is now load-bearing: leaving a stale True here would
+                    # keep the chatter gate shut on a keyboard that really had gone.
+                    self._reached = False
+                # Not `ok`: that is "the pass did what it set out to do", and a write
+                # the device accepts but will not confirm fails it while answering
+                # every request. See :attr:`_reached`.
+                self._note_presence(self._reached)
                 if ok:
                     self._retry = 0.0
+                    self._retry_attempts = 0
                     if self._unsettled():
                         # Keep looking until it has stayed put several times over.
                         # One re-check was not enough: firmware that drops the write
                         # a few seconds later passed that check and then reverted
                         # unobserved until the next heartbeat.
                         next_assert = time.monotonic() + FAST_RECHECK
+                    elif self._peer_present() and self._can_reclaim_on_input():
+                        # Another machine is sharing this keyboard, but this one can
+                        # tell when it is being used again without sending anything to
+                        # the device. Polling the *keyboard* twice a second for thirty
+                        # minutes after one sighting was what starved a receiver this
+                        # machine shares with Logi Options+ of transaction slots; so
+                        # while this machine is idle we send nothing at all and instead
+                        # watch for the user's return. The moment they are back, one
+                        # pass puts the layout right; while they are away, the keyboard
+                        # is the other machine's to set.
+                        next_idle_peek = time.monotonic() + IDLE_PEEK
                     elif self._peer_present():
-                        # Spread the next look so two machines that both briefly think
+                        # A peer is here and this machine cannot measure its own input
+                        # activity. The old bargain is the safe one: re-check on a
+                        # jittered fast cadence so two machines that both briefly think
                         # they are in use cannot settle into a lock-step fight.
                         next_assert = (
                             time.monotonic() + FAST_RECHECK + random.uniform(0.0, PEER_JITTER)
                         )
                     next_heartbeat = (
-                        time.monotonic() + self.cfg.reassert_interval
-                        if self.cfg.reassert_interval
+                        time.monotonic() + interval
+                        if (interval := self._heartbeat_interval())
                         else None
                     )
                 else:
+                    self._retry_attempts += 1
+                    if self._event_only() and self._retry_attempts > QUIET_RETRY_ATTEMPTS:
+                        # Event-only: a device that has not answered in a few tries is on
+                        # another machine, not mid-reconnect. Asking every few seconds for
+                        # as long as it is away is the sustained traffic this mode removes
+                        # -- and on a receiver shared with Logi Options+ it is the dominant
+                        # source of timeouts, since a Bolt receiver stays enumerated across
+                        # an Easy-Switch move and each retry burns the full deadline. Stop,
+                        # and wait for the device to announce itself; the slow heartbeat
+                        # stays armed as the backstop.
+                        self._retry = 0.0
+                        trace.HEALTH.bump("quiet_retries_abandoned")
+                        log.debug(
+                            "device absent after %d tries; waiting for it to return",
+                            QUIET_RETRY_ATTEMPTS,
+                        )
+                        continue
                     self._retry = min(
                         self.cfg.retry_max, max(self.cfg.retry_initial, self._retry * 2)
                     )
                     next_assert = time.monotonic() + self._retry
                     log.debug("retrying in %.1fs", self._retry)
+                continue
+
+            if next_idle_peek is not None and now >= next_idle_peek:
+                # A peer holds the keyboard and this machine was idle. Re-sample the
+                # host's own input clock -- not the device -- and only do real work on
+                # the idle-to-in-use *edge*. The peer can only set the platform while
+                # the keyboard is on the other machine, so one pass when the user
+                # returns is enough: there is nothing to defend against while they
+                # keep typing here, and polling for it is exactly the traffic this
+                # watch exists to avoid.
+                if not self._peer_present():
+                    # The peer is gone (its memory expired). Nothing to reclaim from,
+                    # so stop watching and let the heartbeat and events take over.
+                    next_idle_peek = None
+                    self._was_idle = False
+                    continue
+                idle = self._idle_seconds()
+                in_use = idle is not None and idle <= self.cfg.active_window
+                if in_use and self._was_idle:
+                    # Was away, now back: the edge. One pass reclaims the layout.
+                    # The watch re-arms after that pass (peer still present) to catch
+                    # the user leaving and returning again.
+                    self._was_idle = False
+                    next_idle_peek = None
+                    next_assert = now
+                    trace.HEALTH.bump("quiet_arrivals")
+                else:
+                    self._was_idle = not in_use
+                    next_idle_peek = now + IDLE_PEEK
                 continue
 
             if now >= self._next_summary:
@@ -602,6 +849,7 @@ class Agent(_ArbitrationMixin, _SessionMixin):
         if not self._sessions:
             log.debug("no Logitech HID++ endpoint present")
             self._last_summary = None
+            self._reached = False
             return False
 
         if self._standing_down():
@@ -633,6 +881,7 @@ class Agent(_ArbitrationMixin, _SessionMixin):
                 except (p.TransportClosed, OSError) as exc:
                     log.info("transport lost while applying: %s", exc)
                     self._teardown_sessions("transport lost")
+                    self._reached = False
                     return False
                 applied += 1
                 option = result.option
@@ -688,11 +937,20 @@ class Agent(_ArbitrationMixin, _SessionMixin):
                         log.info("%s already on %s", info.name, option.label)
                         self._last_summary = summary
 
+        # "Did anything we drive answer at all?" -- deliberately a different question
+        # from the one this function returns. A pass fails when a write would not
+        # confirm, and reading that as "nothing is answering" put a sentence in the
+        # log that was not true and left the away-record set on a keyboard sitting
+        # right there -- which is the record that now decides whether its next
+        # notification means it came back.
+        self._reached = applied > 0
+
         self._adopt_foreign_observations()
 
         if changed:
             self._changes_in_a_row += 1
             self._clean_checks = 0
+            self._arrival_corrections += 1
             trace.HEALTH.mark("platform_corrections")
             # Deliberately NOT tearing the session down here any more. Re-enumeration
             # after a platform change is real, and a stale handle is handled: the

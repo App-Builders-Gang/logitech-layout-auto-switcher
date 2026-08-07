@@ -30,6 +30,8 @@ def cmd_watch(args: argparse.Namespace) -> int:
         observe=args.observe,
         active_window=args.active_window,
         claim_host=args.claim_host,
+        event_only=args.event_only,
+        event_only_reassert=args.event_only_reassert,
     )
     agent = Agent(config)
 

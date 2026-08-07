@@ -11,7 +11,46 @@ why no other module imports `hid` directly.
 
 from __future__ import annotations
 
+import sys
 from typing import Any
+
+
+def configure_non_exclusive_open(hid_module: Any) -> bool:
+    """Force the macOS HID open to be non-exclusive. Returns whether it applied.
+
+    cython-hidapi (the ``hid`` package) links the C hidapi library, whose macOS backend
+    opens IOHIDDevice with ``kIOHIDOptionsTypeSeizeDevice`` by default in the build this
+    project ships. A seize gives the opener the device's input reports to itself alone:
+    every other client -- Logi Options+, Solaar, anything reading the same vendor
+    collection -- stops receiving them. That is silent to ordinary typing, which travels
+    a different (boot/consumer) interface, but it breaks every HID++ 2.0 notification
+    another program relies on. A key Logi Options+ has diverted (HID++ ``0x1B04``,
+    control ``0x000A`` for the calculator key) emits its keypress as exactly such a
+    notification; with this agent holding the interface exclusively the notification
+    reached only us, and the key did nothing. Verified both ways: the notification
+    arrives here and the agent sends nothing in reply, yet the key fails; opening
+    non-exclusively restores it immediately.
+
+    hidapi exposes the switch as ``hid_darwin_set_open_exclusive``, but cython-hidapi
+    does not bind it, so reach the symbol through ctypes on the same compiled module. It
+    is a process-wide global that must be set before any open, which is why this runs at
+    import time. The reason it is a named function rather than inline is so a test can
+    prove the call happens and the regression cannot return silently.
+    """
+    if sys.platform != "darwin":
+        return False
+    try:  # pragma: no cover - depends on a native build detail
+        import ctypes
+
+        darwin = ctypes.CDLL(hid_module.__file__)
+        setter = darwin.hid_darwin_set_open_exclusive
+        setter.argtypes = [ctypes.c_int]
+        setter.restype = None
+        setter(0)
+    except (OSError, AttributeError):  # pragma: no cover - older/different build
+        return False
+    return True
+
 
 try:  # pragma: no cover - trivial import shim
     import hid as _hid
@@ -20,6 +59,8 @@ except ImportError as exc:  # pragma: no cover
     _IMPORT_ERROR: Exception | None = exc
 else:
     _IMPORT_ERROR = None
+    # Applied once at import, before any open. See configure_non_exclusive_open above.
+    configure_non_exclusive_open(_hid)
 
 
 class HidUnavailable(RuntimeError):

@@ -17,9 +17,17 @@ def cmd_install(args: argparse.Namespace) -> int:
 
     target = p.normalise_os(args.os) if args.os else None
     try:
-        what = service.install(target)
         on_path = service.ensure_on_path()
-        what = service.install(target, notify=args.notify, observe=args.observe)
+        # One install call. An earlier version registered the service twice -- first
+        # with default flags and then again with the user's -- which on Windows meant
+        # ending, replacing and starting the task twice per install, briefly running
+        # an agent with settings nobody asked for.
+        what = service.install(
+            target,
+            notify=args.notify,
+            observe=args.observe,
+            event_only=args.event_only,
+        )
     except service.ServiceError as exc:
         print(f"install failed: {exc}", file=sys.stderr)
         return 1

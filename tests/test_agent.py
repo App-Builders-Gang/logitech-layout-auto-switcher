@@ -246,6 +246,147 @@ def test_a_driven_device_talking_again_triggers_a_reassert(receiver, tmp_path):
         agent.shutdown()
 
 
+# -- chatter from a device that never left ------------------------------------
+#
+# The calculator-key regression. A key Logi Options+ diverts (HID++ 0x1B04) emits a
+# notification instead of a keystroke, and an unsolicited notification from a driven
+# device used to be treated as "the keyboard came back" -- scheduling a platform read
+# 200ms later, on the same single-slot receiver Options+ was using to service the
+# keypress. With the agent running the key did nothing; stopped, it worked at once.
+# The gate: a return is only possible when the device was away, and only the heartbeat
+# records that. These tests pin both halves of the question plus the escape hatch.
+
+
+def _lock_key_state(index=fakehid.MX_KEYS_INDEX):
+    """What an MX Keys S sends unprompted: long report, feature 0x0E, swId 0."""
+    return bytes([0x11, index, 0x0E, 0x00] + [0] * 16)
+
+
+def test_chatter_from_a_settled_keyboard_is_not_a_reconnect(receiver, tmp_path):
+    """The regression test for the calculator key.
+
+    A keyboard that is present, answering, and talking is chattering, not returning:
+    nothing it says while it never left can mean it came back.
+    """
+    from logiswitch import trace
+
+    trace.HEALTH.reset()
+    # reassert_interval must be non-zero or the gate is bypassed (see the next test).
+    agent = Agent(config(tmp_path, force_polling=True, reassert_interval=20.0))
+    agent.start()
+    try:
+        wait_until_settled(agent, receiver, platform=0)
+        assert agent._absent_since is None, "a device that answered is not absent"
+        agent._on_hidpp_frame(_lock_key_state())
+        assert agent._queue.empty(), "chatter from a present device must not wake the agent"
+        assert trace.HEALTH.get("settled_chatter") == 1
+    finally:
+        agent.stop()
+        agent.shutdown()
+
+
+def test_chatter_from_a_keyboard_that_stopped_answering_is_still_a_reconnect(receiver, tmp_path):
+    """The Easy-Switch guard: the gate must not swallow a genuine return.
+
+    A Bolt receiver forwards no connect notification across a channel move, so the
+    only sign a keyboard came back is that it starts talking -- and the heartbeat is
+    what records that it went. With that record set, the same chatter that the
+    previous test ignored must now wake the agent.
+    """
+    agent = Agent(config(tmp_path, force_polling=True, reassert_interval=20.0))
+    agent.start()
+    try:
+        wait_until_settled(agent, receiver, platform=0)
+        agent._absent_since = time.monotonic()  # the heartbeat found nothing answering
+        agent._on_hidpp_frame(_lock_key_state())
+        kind, payload = agent._queue.get_nowait()
+        assert (kind.value, payload) == ("device_woke", fakehid.MX_KEYS_INDEX)
+    finally:
+        agent.stop()
+        agent.shutdown()
+
+
+def test_with_the_heartbeat_off_chatter_is_the_only_signal_there_is(receiver, tmp_path):
+    """The escape hatch: reassert_interval=0 disables the only absence detector.
+
+    With no heartbeat running, nothing records that a device went away, so chatter
+    can no longer be distinguished from a return and is trusted exactly as before.
+    This is also why every other test in the file passes unchanged: their configs
+    default reassert_interval to 0.0.
+    """
+    agent = Agent(config(tmp_path, force_polling=True, reassert_interval=0.0))
+    agent.start()
+    try:
+        wait_until_settled(agent, receiver, platform=0)
+        agent._on_hidpp_frame(_lock_key_state())
+        kind, payload = agent._queue.get_nowait()
+        assert (kind.value, payload) == ("device_woke", fakehid.MX_KEYS_INDEX)
+    finally:
+        agent.stop()
+        agent.shutdown()
+
+
+def test_a_settled_agent_transmits_nothing_while_the_keyboard_chatters(receiver, tmp_path):
+    """End-to-end: chatter moves neither the request counter nor the apply counter.
+
+    The previous tests prove the queue stays empty; this one proves no frame reaches
+    the device either, which is the property that actually stops the collision with
+    Logi Options+.
+    """
+    from logiswitch import trace
+
+    trace.HEALTH.reset()
+    agent = Agent(config(tmp_path, force_polling=True, reassert_interval=60.0))
+    agent.start()
+    try:
+        wait_until_settled(agent, receiver, platform=0)
+        requests_before = trace.HEALTH.get("requests")
+        applies_before = agent._apply_count
+        # Twenty lock-key notifications -- three times the 0.2s a wake would have
+        # scheduled a pass within, so a stray pass has every chance to land and be
+        # caught.
+        for _ in range(20):
+            agent._on_hidpp_frame(_lock_key_state())
+        time.sleep(0.6)
+        assert trace.HEALTH.get("requests") == requests_before
+        assert agent._apply_count == applies_before
+    finally:
+        agent.stop()
+        agent.shutdown()
+
+
+def test_a_write_that_would_not_confirm_is_not_logged_as_nothing_answering(receiver, tmp_path):
+    """A pass that fails because a write would not confirm still reached the device.
+
+    `applied > 0 and failed == 0` used to feed the presence record, so a keyboard that
+    accepted and then dropped a write logged "nothing is answering" about a device
+    sitting on the desk -- and left `_absent_since` set, which is now the record that
+    decides whether the next notification means the keyboard returned.
+    """
+    from logiswitch.hidpp import protocol as p
+
+    real = receiver._multiplatform
+
+    def acknowledge_but_ignore(frame, dev, function, params):
+        if function == p.MP_SET_HOST_PLATFORM:
+            return receiver._pad(frame, b"")  # accepted; the platform does not change
+        return real(frame, dev, function, params)
+
+    agent = Agent(config(tmp_path, force_polling=True, reassert_interval=0.5))
+    agent.start()
+    try:
+        wait_until_settled(agent, receiver, platform=0)
+        receiver._multiplatform = acknowledge_but_ignore
+        receiver.devices[fakehid.MX_KEYS_INDEX].platform = 1  # wrong; the write won't stick
+        assert wait_for(lambda: agent._apply_count >= 2), "the failing pass never ran"
+        assert agent._reached is True, "the device answered even though the write did not stick"
+        assert agent._absent_since is None, "an answering device is not absent"
+    finally:
+        receiver._multiplatform = real
+        agent.stop()
+        agent.shutdown()
+
+
 def test_a_reconnect_restarts_the_backoff_instead_of_inheriting_it(receiver, tmp_path):
     """The 32-second lag: a device that was away leaves _retry at its 30s ceiling.
 
